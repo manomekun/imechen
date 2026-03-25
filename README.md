@@ -149,4 +149,8 @@ bun run tauri build
 
 ## ライセンス
 
-MIT
+[BSL 1.1](LICENSE.md)（Business Source License 1.1）
+
+- ソースコードの閲覧: OK
+- 商用・本番利用: NG（ライセンス購入が必要）
+- 2030-03-25 以降 Apache License 2.0 に移行
