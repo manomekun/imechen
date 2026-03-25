@@ -1,0 +1,92 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pixelGrid {
+  width: 120px;
+  height: 120px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-template-rows: repeat(6, 1fr);
+  gap: 3px;
+  perspective: 400px;
+}
+
+.pixel {
+  border-radius: 3px;
+  animation: pixelDance 2.4s ease-in-out infinite;
+}
+
+/* Each pixel gets a unique delay + color for a wave-like scatter/reassemble effect */
+.pixel:nth-child(6n+1) { animation-delay: 0s; }
+.pixel:nth-child(6n+2) { animation-delay: 0.08s; }
+.pixel:nth-child(6n+3) { animation-delay: 0.16s; }
+.pixel:nth-child(6n+4) { animation-delay: 0.24s; }
+.pixel:nth-child(6n+5) { animation-delay: 0.32s; }
+.pixel:nth-child(6n+6) { animation-delay: 0.4s; }
+
+/* Row offsets */
+.pixel:nth-child(n+7):nth-child(-n+12) { animation-delay: calc(0.1s + var(--col-delay, 0s)); }
+.pixel:nth-child(n+13):nth-child(-n+18) { animation-delay: calc(0.2s + var(--col-delay, 0s)); }
+.pixel:nth-child(n+19):nth-child(-n+24) { animation-delay: calc(0.3s + var(--col-delay, 0s)); }
+.pixel:nth-child(n+25):nth-child(-n+30) { animation-delay: calc(0.4s + var(--col-delay, 0s)); }
+.pixel:nth-child(n+31):nth-child(-n+36) { animation-delay: calc(0.5s + var(--col-delay, 0s)); }
+
+@keyframes pixelDance {
+  0% {
+    transform: scale(1) translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+  15% {
+    transform: scale(0.6) translate(var(--dx), var(--dy)) rotate(90deg);
+    opacity: 0.4;
+  }
+  30% {
+    transform: scale(0.2) translate(calc(var(--dx) * 2), calc(var(--dy) * 2)) rotate(180deg);
+    opacity: 0.1;
+  }
+  50% {
+    transform: scale(0.2) translate(calc(var(--dx) * -1.5), calc(var(--dy) * -1.5)) rotate(270deg);
+    opacity: 0.1;
+  }
+  70% {
+    transform: scale(0.6) translate(calc(var(--dx) * -0.5), calc(var(--dy) * -0.5)) rotate(340deg);
+    opacity: 0.5;
+  }
+  85% {
+    transform: scale(1.1) translate(0, 0) rotate(355deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) translate(0, 0) rotate(360deg);
+    opacity: 1;
+  }
+}
+
+.label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #ffffff;
+}
+
+.sublabel {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: var(--font-mono);
+}

@@ -1,0 +1,96 @@
+@import "./theme.css";
+
+/* Reset & Base */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-primary);
+  background-color: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Glassmorphism */
+.glass {
+  background: var(--bg-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+}
+
+.glass:hover {
+  border-color: var(--glass-border-hover);
+}
+
+/* Neumorphism */
+.neu {
+  background: var(--bg-elevated);
+  box-shadow:
+    -2px -2px 6px var(--neu-light),
+    2px 2px 6px var(--neu-dark);
+}
+
+.neu:active {
+  box-shadow:
+    inset -2px -2px 6px var(--neu-light),
+    inset 2px 2px 6px var(--neu-dark);
+}
+
+/* Gradient button */
+.gradient-btn {
+  background: linear-gradient(180deg, var(--accent), var(--accent-light));
+  box-shadow: 0 4px 16px var(--accent-glow);
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+  transition: box-shadow 0.2s, transform 0.1s;
+}
+
+.gradient-btn:hover {
+  box-shadow: 0 6px 20px var(--accent-glow);
+}
+
+.gradient-btn:active {
+  transform: scale(0.98);
+}
+
+/* Progress bar */
+.progress-fill {
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--glass-border-hover);
+}
+
+/* Monospace text */
+.mono {
+  font-family: var(--font-mono);
+}

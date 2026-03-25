@@ -1,0 +1,32 @@
+# Frontend
+node_modules
+dist
+
+# Rust
+src-tauri/target
+
+# Bun
+bun.lockb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Pencil design files (large binary)
+*.pen
+
+# Template leftovers
+src/App.css
+src/assets/logo.svg
+public/tauri.svg
+public/vite.svg
+
+# Misc
+*.log
+/tmp/

@@ -1,0 +1,30 @@
+.btn {
+  background: var(--bg-elevated);
+  box-shadow:
+    -2px -2px 6px var(--neu-light),
+    2px 2px 6px var(--neu-dark);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn:active {
+  box-shadow:
+    inset -2px -2px 6px var(--neu-light),
+    inset 2px 2px 6px var(--neu-dark);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

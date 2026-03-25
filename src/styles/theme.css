@@ -1,0 +1,62 @@
+/* imechen Theme System - Glassmorphism + Neumorphism 2.0 */
+
+:root {
+  /* Font families */
+  --font-ui: "Noto Sans JP", "Inter", sans-serif;
+  --font-mono: "UDEVGothic", "DM Mono", monospace;
+
+  /* Spacing scale */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* Radius scale */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-full: 100px;
+
+  /* Accent colors (shared) */
+  --accent: #f97316;
+  --accent-light: #fb923c;
+  --success: #22c55e;
+  --error: #ef4444;
+  --warning: #f59e0b;
+}
+
+/* Dark theme (default) */
+:root,
+[data-theme="dark"] {
+  --bg-base: #0f0f14;
+  --bg-inset: #16161d;
+  --bg-elevated: #1c1c26;
+  --bg-glass: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.13);
+  --text-primary: #f0f0f5;
+  --text-secondary: #8b8b9e;
+  --text-muted: #5a5a6e;
+  --accent-tint: rgba(249, 115, 22, 0.09);
+  --accent-glow: rgba(249, 115, 22, 0.27);
+  --neu-light: rgba(255, 255, 255, 0.05);
+  --neu-dark: rgba(0, 0, 0, 0.4);
+}
+
+/* Light theme */
+[data-theme="light"] {
+  --bg-base: #f5f5fa;
+  --bg-inset: #e2e2ea;
+  --bg-elevated: #f0f0f6;
+  --bg-glass: #ffffff;
+  --glass-border: rgba(0, 0, 0, 0.16);
+  --glass-border-hover: rgba(0, 0, 0, 0.13);
+  --text-primary: #1a1a2e;
+  --text-secondary: #6b6b80;
+  --text-muted: #8888a0;
+  --accent-tint: rgba(249, 115, 22, 0.08);
+  --accent-glow: rgba(249, 115, 22, 0.2);
+  --neu-light: rgba(255, 255, 255, 0.8);
+  --neu-dark: rgba(0, 0, 0, 0.2);
+}
