@@ -196,12 +196,16 @@ pub async fn convert_video(
         args.extend(["-crf".to_string(), crf.to_string()]);
     }
 
-    // Resize if requested
-    if let (Some(w), Some(h)) = (request.resize_width, request.resize_height) {
-        // Ensure even dimensions for h264
-        let w = w - (w % 2);
-        let h = h - (h % 2);
-        args.extend(["-vf".to_string(), format!("scale={}:{}", w, h)]);
+    // Resize if requested. ffmpeg's `-2` means "auto, divisible by 2"
+    // so a single-axis input keeps aspect ratio while staying h264-safe.
+    let scale_filter = match (request.resize_width, request.resize_height) {
+        (Some(w), Some(h)) => Some(format!("scale={}:{}", w - (w % 2), h - (h % 2))),
+        (Some(w), None) => Some(format!("scale={}:-2", w - (w % 2))),
+        (None, Some(h)) => Some(format!("scale=-2:{}", h - (h % 2))),
+        (None, None) => None,
+    };
+    if let Some(vf) = scale_filter {
+        args.extend(["-vf".to_string(), vf]);
     }
 
     // Audio copy

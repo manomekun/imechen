@@ -185,15 +185,40 @@ fn convert_image_sync(request: ConvertImageRequest) -> Result<ConvertImageResult
     let original_size = std::fs::metadata(source).map_err(|e| e.to_string())?.len();
     let mut img = image::open(source).map_err(|e| e.to_string())?;
 
-    // Resize if requested
-    if let (Some(w), Some(h)) = (request.resize_width, request.resize_height) {
-        let keep_aspect = request.keep_aspect_ratio.unwrap_or(true);
-        if keep_aspect {
-            img = img.resize(w, h, image::imageops::FilterType::Lanczos3);
-        } else {
-            img = img.resize_exact(w, h, image::imageops::FilterType::Lanczos3);
+    // Resize if requested.
+    // Cases:
+    //   - both width & height: keep_aspect=true → fit within bounds; false → exact stretch
+    //   - width only:  keep_aspect=true → height auto from source ratio; false → height unchanged
+    //   - height only: keep_aspect=true → width auto from source ratio;  false → width unchanged
+    let keep_aspect = request.keep_aspect_ratio.unwrap_or(true);
+    let filter = image::imageops::FilterType::Lanczos3;
+    let (src_w, src_h) = (img.width(), img.height());
+    img = match (request.resize_width, request.resize_height) {
+        (Some(w), Some(h)) => {
+            if keep_aspect {
+                img.resize(w, h, filter)
+            } else {
+                img.resize_exact(w, h, filter)
+            }
         }
-    }
+        (Some(w), None) => {
+            let h = if keep_aspect && src_w > 0 {
+                ((w as u64 * src_h as u64) / src_w as u64).max(1) as u32
+            } else {
+                src_h
+            };
+            img.resize_exact(w, h, filter)
+        }
+        (None, Some(h)) => {
+            let w = if keep_aspect && src_h > 0 {
+                ((h as u64 * src_w as u64) / src_h as u64).max(1) as u32
+            } else {
+                src_w
+            };
+            img.resize_exact(w, h, filter)
+        }
+        (None, None) => img,
+    };
 
     let target_format = parse_format(&request.output_format)?;
     let ext = format_extension(target_format);
