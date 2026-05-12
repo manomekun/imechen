@@ -16,6 +16,12 @@ import {
   type ConvertImageResult,
 } from "../lib/tauri";
 
+interface ConvertError {
+  name: string;
+  path: string;
+  message: string;
+}
+
 const imageFormats = [
   { value: "png", label: "PNG" },
   { value: "jpeg", label: "JPEG" },
@@ -37,6 +43,7 @@ export default function ImageConvert() {
   const [isConverting, setIsConverting] = createSignal(false);
   const [progress, setProgress] = createSignal(0);
   const [results, setResults] = createSignal<ConvertImageResult[]>([]);
+  const [errors, setErrors] = createSignal<ConvertError[]>([]);
 
   const handleFilesSelected = async (paths: string[]) => {
     const infos: FileInfo[] = [];
@@ -72,6 +79,7 @@ export default function ImageConvert() {
     setIsConverting(true);
     setProgress(0);
     setResults([]);
+    setErrors([]);
 
     // Wait for the loader to render before starting heavy work
     await yieldToUI();
@@ -92,7 +100,12 @@ export default function ImageConvert() {
         setResults((prev) => [...prev, res]);
         setFiles((prev) => prev.filter((f) => f.path !== file.path));
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
         console.error(`Conversion failed for ${file.name}:`, e);
+        setErrors((prev) => [
+          ...prev,
+          { name: file.name, path: file.path, message },
+        ]);
       }
       setProgress(Math.round(((i + 1) / total) * 100));
       // Yield between files so progress updates render
@@ -445,10 +458,20 @@ export default function ImageConvert() {
                   <span
                     style={{
                       "font-size": "12px",
-                      color: "var(--text-secondary)",
+                      color: isConverting()
+                        ? "var(--text-secondary)"
+                        : errors().length > 0
+                          ? "var(--error)"
+                          : "var(--text-secondary)",
                     }}
                   >
-                    {isConverting() ? "変換中..." : "完了"}
+                    {isConverting()
+                      ? "変換中..."
+                      : errors().length === 0
+                        ? "完了"
+                        : results().length === 0
+                          ? `失敗 (${errors().length}件)`
+                          : `完了 (${errors().length}件失敗)`}
                   </span>
                   <span
                     class="mono"
@@ -528,6 +551,82 @@ export default function ImageConvert() {
               </div>
             </Show>
           </GlassCard>
+
+          <Show when={errors().length > 0}>
+            <GlassCard
+              title={`エラー (${errors().length})`}
+              style={{ "max-height": "200px", overflow: "auto" }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  "flex-direction": "column",
+                  gap: "8px",
+                }}
+              >
+                <For each={errors()}>
+                  {(err) => (
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "10px",
+                        "align-items": "flex-start",
+                        padding: "8px 12px",
+                        background: "var(--bg-glass)",
+                        border: "1px solid var(--error)",
+                        "border-radius": "var(--radius-sm)",
+                      }}
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--error)"
+                        stroke-width="2"
+                        style={{ "flex-shrink": 0, "margin-top": "2px" }}
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      <div
+                        style={{
+                          flex: 1,
+                          "min-width": 0,
+                          display: "flex",
+                          "flex-direction": "column",
+                          gap: "2px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            "font-size": "12px",
+                            "font-weight": 500,
+                            overflow: "hidden",
+                            "text-overflow": "ellipsis",
+                            "white-space": "nowrap",
+                          }}
+                          title={err.path}
+                        >
+                          {err.name}
+                        </span>
+                        <span
+                          style={{
+                            "font-size": "10px",
+                            color: "var(--error)",
+                            "word-break": "break-word",
+                          }}
+                        >
+                          {err.message}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </GlassCard>
+          </Show>
 
           <Show when={results().length > 0}>
             <GlassCard

@@ -100,57 +100,71 @@ pub async fn get_image_info(path: String) -> Result<ImageInfo, String> {
 
 /// Compress PNG using pngquant (imagequant) for lossy quantization + oxipng for lossless optimization.
 /// Quality range: 0 (smallest, worst) to 100 (largest, best).
+/// When quality is 100, the lossy pngquant step is skipped and only the lossless oxipng pass runs.
 fn compress_png(
     img: &image::DynamicImage,
     output_path: &Path,
     quality: u8,
 ) -> Result<(), String> {
     let rgba = img.to_rgba8();
-    let width = rgba.width() as usize;
-    let height = rgba.height() as usize;
-    let raw_pixels = rgba.as_raw();
+    let width = rgba.width();
+    let height = rgba.height();
 
-    // Convert &[u8] (RGBA bytes) to &[imagequant::RGBA] for imagequant
-    let pixels: &[imagequant::RGBA] = unsafe {
-        std::slice::from_raw_parts(raw_pixels.as_ptr() as *const imagequant::RGBA, width * height)
+    let png_buf = if quality >= 100 {
+        // Lossless path: encode the source pixels straight to PNG and let oxipng handle the rest.
+        let mut buf = Cursor::new(Vec::new());
+        rgba.write_to(&mut buf, ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        buf.into_inner()
+    } else {
+        let width = width as usize;
+        let height = height as usize;
+        let raw_pixels = rgba.as_raw();
+
+        // Convert &[u8] (RGBA bytes) to &[imagequant::RGBA] for imagequant
+        let pixels: &[imagequant::RGBA] = unsafe {
+            std::slice::from_raw_parts(
+                raw_pixels.as_ptr() as *const imagequant::RGBA,
+                width * height,
+            )
+        };
+
+        // imagequant (pngquant) - lossy color quantization
+        let mut liq = imagequant::new();
+        let min_quality = quality.saturating_sub(20);
+        liq.set_quality(min_quality, quality).map_err(|e| e.to_string())?;
+
+        let mut liq_image = liq
+            .new_image_borrowed(pixels, width, height, 0.0)
+            .map_err(|e| e.to_string())?;
+
+        let mut result = liq.quantize(&mut liq_image).map_err(|e| e.to_string())?;
+        result.set_dithering_level(1.0).map_err(|e| e.to_string())?;
+        let (palette, quantized_pixels) =
+            result.remapped(&mut liq_image).map_err(|e| e.to_string())?;
+
+        // Encode quantized palette + indices as an RGBA PNG
+        let mut output_rgba = Vec::with_capacity(width * height * 4);
+        for &idx in &quantized_pixels {
+            let c = &palette[idx as usize];
+            output_rgba.extend_from_slice(&[c.r, c.g, c.b, c.a]);
+        }
+
+        let quantized_img =
+            image::RgbaImage::from_raw(width as u32, height as u32, output_rgba)
+                .ok_or("Failed to create quantized image")?;
+
+        let mut buf = Cursor::new(Vec::new());
+        quantized_img
+            .write_to(&mut buf, ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        buf.into_inner()
     };
 
-    // Step 1: imagequant (pngquant) - lossy color quantization
-    let mut liq = imagequant::new();
-    let min_quality = quality.saturating_sub(20);
-    liq.set_quality(min_quality, quality).map_err(|e| e.to_string())?;
-
-    let mut liq_image = liq
-        .new_image_borrowed(pixels, width, height, 0.0)
-        .map_err(|e| e.to_string())?;
-
-    let mut result = liq.quantize(&mut liq_image).map_err(|e| e.to_string())?;
-    result.set_dithering_level(1.0).map_err(|e| e.to_string())?;
-    let (palette, quantized_pixels) = result.remapped(&mut liq_image).map_err(|e| e.to_string())?;
-
-    // Step 2: Encode as indexed PNG using image crate
-    // Build an RGBA image from quantized palette + indices
-    let mut output_rgba = Vec::with_capacity(width * height * 4);
-    for &idx in &quantized_pixels {
-        let c = &palette[idx as usize];
-        output_rgba.extend_from_slice(&[c.r, c.g, c.b, c.a]);
-    }
-
-    let quantized_img =
-        image::RgbaImage::from_raw(width as u32, height as u32, output_rgba)
-            .ok_or("Failed to create quantized image")?;
-
-    let mut png_buf = Cursor::new(Vec::new());
-    quantized_img
-        .write_to(&mut png_buf, ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-
-    // Step 3: oxipng - lossless re-compression
-    let optimized = oxipng::optimize_from_memory(
-        png_buf.get_ref(),
-        &oxipng::Options::from_preset(2),
-    )
-    .map_err(|e| e.to_string())?;
+    // oxipng - lossless re-compression (always applied)
+    let optimized =
+        oxipng::optimize_from_memory(&png_buf, &oxipng::Options::from_preset(2))
+            .map_err(|e| e.to_string())?;
 
     std::fs::write(output_path, optimized).map_err(|e| e.to_string())?;
     Ok(())
