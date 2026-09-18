@@ -2,7 +2,6 @@ use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::FfmpegEvent;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tauri::{Emitter, AppHandle};
 
 #[derive(Debug, Deserialize)]
@@ -77,54 +76,57 @@ fn get_video_codec_for_format(format: &str) -> &str {
     }
 }
 
-/// Get ffprobe path (next to ffmpeg binary)
-fn ffprobe_path() -> PathBuf {
-    let ffmpeg = ffmpeg_sidecar::paths::ffmpeg_path();
-    let dir = ffmpeg.parent().unwrap_or(Path::new("."));
-    dir.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" })
+/// Read input metadata from ffmpeg's own stderr instead of ffprobe:
+/// the macOS sidecar download ships only the ffmpeg binary, so ffprobe
+/// cannot be assumed to exist next to it.
+fn probe_video(path: &str) -> Result<(u32, u32, f64, String, String), String> {
+    let iter = FfmpegCommand::new()
+        .input(path)
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn failed: {}", e))?
+        .iter()
+        .map_err(|e| format!("ffmpeg iter failed: {}", e))?;
+
+    let mut format: Option<String> = None;
+    let mut duration: Option<f64> = None;
+    let mut video: Option<(u32, u32, String)> = None;
+
+    for event in iter {
+        match event {
+            FfmpegEvent::ParsedInput(input) if input.index == 0 => {
+                format = parse_input_format(&input.raw_log_message);
+            }
+            FfmpegEvent::ParsedDuration(d) if d.input_index == 0 => {
+                duration = Some(d.duration);
+            }
+            FfmpegEvent::ParsedInputStream(stream)
+                if stream.parent_index == 0 && video.is_none() =>
+            {
+                if let Some(v) = stream.video_data() {
+                    video = Some((v.width, v.height, stream.format.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (width, height, codec) = video.ok_or("No video stream found")?;
+    Ok((
+        width,
+        height,
+        duration.unwrap_or(0.0),
+        format.unwrap_or_else(|| "unknown".to_string()),
+        codec,
+    ))
 }
 
-/// Parse video metadata using ffprobe (bundled with ffmpeg-sidecar)
-fn probe_video(path: &str) -> Result<(u32, u32, f64, String, String), String> {
-    let output = Command::new(ffprobe_path())
-        .args([
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            path,
-        ])
-        .output()
-        .map_err(|e| format!("ffprobe failed: {}", e))?;
-
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("ffprobe parse error: {}", e))?;
-
-    let video_stream = json["streams"]
-        .as_array()
-        .and_then(|streams| {
-            streams.iter().find(|s| s["codec_type"].as_str() == Some("video"))
-        })
-        .ok_or("No video stream found")?;
-
-    let width = video_stream["width"].as_u64().unwrap_or(0) as u32;
-    let height = video_stream["height"].as_u64().unwrap_or(0) as u32;
-    let codec = video_stream["codec_name"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
-
-    let duration = json["format"]["duration"]
-        .as_str()
-        .and_then(|d| d.parse::<f64>().ok())
-        .unwrap_or(0.0);
-
-    let format = json["format"]["format_name"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
-
-    Ok((width, height, duration, format, codec))
+/// `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/path/a.mp4':` -> `mov,mp4,m4a,3gp,3g2,mj2`
+fn parse_input_format(raw: &str) -> Option<String> {
+    let rest = raw.strip_prefix("[info]").unwrap_or(raw).trim();
+    let rest = rest.strip_prefix("Input #")?;
+    let (_, rest) = rest.split_once(", ")?;
+    let (format, _) = rest.split_once(", from ")?;
+    Some(format.to_string())
 }
 
 #[tauri::command]
@@ -272,4 +274,78 @@ pub async fn ensure_ffmpeg() -> Result<bool, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_input_format_extracts_format_from_plain_line() {
+        let raw = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/x/a.mp4':";
+        assert_eq!(
+            parse_input_format(raw),
+            Some("mov,mp4,m4a,3gp,3g2,mj2".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_input_format_strips_log_level_prefix() {
+        let raw = "[info] Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/x/a.mp4':";
+        assert_eq!(
+            parse_input_format(raw),
+            Some("mov,mp4,m4a,3gp,3g2,mj2".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_input_format_returns_none_for_unrelated_line() {
+        let raw = "  Duration: 00:00:23.06, start: 0.000000, bitrate: 5400 kb/s";
+        assert_eq!(parse_input_format(raw), None);
+    }
+
+    /// Removes the generated fixture even if an assertion panics mid-test.
+    struct TempFileGuard(PathBuf);
+
+    impl Drop for TempFileGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn probe_video_reads_metadata_from_ffmpeg_only() {
+        let path = std::env::temp_dir().join(format!("probe_video_test_{}.mp4", std::process::id()));
+        let guard = TempFileGuard(path.clone());
+        let path_str = path.to_string_lossy().to_string();
+
+        let iter = FfmpegCommand::new()
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x48:rate=10:duration=1",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .output(&path_str)
+            .spawn()
+            .expect("ffmpeg spawn failed")
+            .iter()
+            .expect("ffmpeg iter failed");
+
+        for _event in iter {}
+
+        let (width, height, duration_secs, format, codec) =
+            probe_video(&path_str).expect("probe_video failed");
+
+        drop(guard);
+
+        assert_eq!(width, 64);
+        assert_eq!(height, 48);
+        assert_eq!(codec, "h264");
+        assert!((0.8..=1.2).contains(&duration_secs));
+        assert!(format.contains("mp4"));
+    }
 }
