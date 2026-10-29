@@ -263,13 +263,94 @@ pub async fn convert_video(
     .map_err(|e| e.to_string())?
 }
 
+/// ffmpeg-sidecar's `auto_download` fetches floating "latest" URLs from
+/// third-party hosts and installs whatever comes back, so each release-CI
+/// target is pinned to an exact archive and digest instead. Dependabot cannot
+/// bump these; update the URL and digest together by hand.
+fn pinned_ffmpeg_archive() -> Option<(&'static str, &'static str)> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some((
+            "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
+            "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+        ))
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        // martin-riedl stops publishing Intel macOS builds in 2027-01; existing
+        // build URLs are expected to stay, but no newer pin will be available.
+        Some((
+            "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
+            "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+        ))
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        Some((
+            "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
+            "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
+        ))
+    }
+    // BtbN has no permanent per-version tags; only month-end autobuilds are kept,
+    // for two years. These expire around 2028-09, after which the download
+    // fails the digest/HTTP check instead of installing something unverified.
+    else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some((
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-9.0.tar.xz",
+            "68ee646831adaae2495618346f3bba94ff207ff83bbd34d643e7004730d66269",
+        ))
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        Some((
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/ffmpeg-n9.0.2-17-g2a571b6068-linuxarm64-gpl-9.0.tar.xz",
+            "91afcd7695d4bbbb9e0057aa10baaf9875ec4e1a97303f9059ec971336a2ab46",
+        ))
+    } else {
+        None
+    }
+}
+
+/// Must run before unpacking: extraction itself parses attacker-controlled
+/// archive metadata, so an unverified archive is never handed to the unpacker.
+fn verify_sha256(path: &Path, expected_hex: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| e.to_string())?;
+    let actual = format!("{:x}", hasher.finalize());
+
+    if actual.eq_ignore_ascii_case(expected_hex) {
+        Ok(())
+    } else {
+        let _ = std::fs::remove_file(path);
+        Err(format!(
+            "ffmpeg archive checksum mismatch (expected {}, got {})",
+            expected_hex, actual
+        ))
+    }
+}
+
 /// Download ffmpeg binary if not present (development convenience)
 #[tauri::command]
 pub async fn ensure_ffmpeg() -> Result<bool, String> {
+    use ffmpeg_sidecar::command::ffmpeg_is_installed;
+    use ffmpeg_sidecar::download::{download_ffmpeg_package, unpack_ffmpeg_without_extras};
+    use ffmpeg_sidecar::paths::sidecar_dir;
+
     tauri::async_runtime::spawn_blocking(|| {
-        match ffmpeg_sidecar::download::auto_download() {
-            Ok(_) => Ok(true),
-            Err(e) => Err(format!("ffmpeg download failed: {}", e)),
+        if ffmpeg_is_installed() {
+            return Ok(true);
+        }
+
+        let (url, sha256) = pinned_ffmpeg_archive()
+            .ok_or("No verified ffmpeg build for this platform; install ffmpeg manually")?;
+        let dir = sidecar_dir().map_err(|e| format!("ffmpeg download failed: {}", e))?;
+        let archive = download_ffmpeg_package(url, &dir)
+            .map_err(|e| format!("ffmpeg download failed: {}", e))?;
+        verify_sha256(&archive, sha256)?;
+        // probe_video and convert_video only need ffmpeg itself.
+        unpack_ffmpeg_without_extras(&archive, &dir)
+            .map_err(|e| format!("ffmpeg unpack failed: {}", e))?;
+
+        if ffmpeg_is_installed() {
+            Ok(true)
+        } else {
+            Err("ffmpeg failed to install, please install manually".to_string())
         }
     })
     .await
@@ -302,6 +383,45 @@ mod tests {
     fn parse_input_format_returns_none_for_unrelated_line() {
         let raw = "  Duration: 00:00:23.06, start: 0.000000, bitrate: 5400 kb/s";
         assert_eq!(parse_input_format(raw), None);
+    }
+
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fn write_fixture(tag: &str, bytes: &[u8]) -> PathBuf {
+        let path = std::env::temp_dir()
+            .join(format!("verify_sha256_{}_{}", tag, std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn verify_sha256_accepts_matching_digest_in_any_case() {
+        let path = write_fixture("match", b"abc");
+        let _guard = TempFileGuard(path.clone());
+
+        assert_eq!(verify_sha256(&path, ABC_SHA256), Ok(()));
+        assert_eq!(verify_sha256(&path, &ABC_SHA256.to_uppercase()), Ok(()));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn verify_sha256_rejects_and_deletes_tampered_archive() {
+        let path = write_fixture("mismatch", b"abd");
+        let _guard = TempFileGuard(path.clone());
+
+        let err = verify_sha256(&path, ABC_SHA256).unwrap_err();
+
+        assert!(err.contains("checksum mismatch"), "{}", err);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn pinned_ffmpeg_archive_digests_are_sha256_hex() {
+        if let Some((url, sha256)) = pinned_ffmpeg_archive() {
+            assert!(url.starts_with("https://"));
+            assert_eq!(sha256.len(), 64);
+            assert!(sha256.chars().all(|c| c.is_ascii_hexdigit()));
+        }
     }
 
     /// Removes the generated fixture even if an assertion panics mid-test.
