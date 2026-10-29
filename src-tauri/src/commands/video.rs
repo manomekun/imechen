@@ -424,6 +424,43 @@ mod tests {
         }
     }
 
+    /// Opt-in because it needs the real pinned archive for this host:
+    /// `IMECHEN_FFMPEG_ARCHIVE=/path/to/archive cargo test -- --ignored`
+    #[test]
+    #[ignore]
+    fn pinned_archive_verifies_unpacks_and_runs() {
+        use ffmpeg_sidecar::download::unpack_ffmpeg_without_extras;
+
+        let Ok(src) = std::env::var("IMECHEN_FFMPEG_ARCHIVE") else {
+            return;
+        };
+        let (url, sha256) = pinned_ffmpeg_archive().expect("no pin for this host");
+        let dir = std::env::temp_dir().join(format!("imechen_unpack_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = TempDirGuard(dir.clone());
+        let archive = dir.join(Path::new(url).file_name().unwrap());
+        std::fs::copy(&src, &archive).unwrap();
+
+        verify_sha256(&archive, sha256).expect("digest mismatch");
+        unpack_ffmpeg_without_extras(&archive, &dir).expect("unpack failed");
+
+        let bin = dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+        let status = std::process::Command::new(&bin)
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("extracted ffmpeg is not executable");
+        assert!(status.success());
+    }
+
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Removes the generated fixture even if an assertion panics mid-test.
     struct TempFileGuard(PathBuf);
 
