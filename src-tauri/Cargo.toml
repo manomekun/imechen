@@ -23,4 +23,5 @@ base64 = "0.22"
 imagequant = "4"
 oxipng = { version = "9", default-features = false, features = ["parallel"] }
 webp = "0.3"
-ffmpeg-sidecar = "2"
+ffmpeg-sidecar = "2.7"
+sha2 = "0.10"
