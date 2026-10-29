@@ -19,6 +19,30 @@ pub struct CreateAnimationResult {
     pub output_size: u64,
 }
 
+/// `output_name` arrives from the webview; anything that is not a bare file
+/// name would let the join below escape the user-chosen `output_dir`.
+fn validate_output_name(name: &str) -> Result<&str, String> {
+    let is_bare = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\'])
+        && Path::new(name).file_name().is_some_and(|f| f == name);
+    if is_bare {
+        Ok(name)
+    } else {
+        Err(format!("Invalid output name: {}", name))
+    }
+}
+
+/// Removes the per-run frame directory on every exit path, including `?` early returns.
+struct TempDirGuard(PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Load and optionally resize images to match the first frame's dimensions
 fn load_frames(paths: &[String]) -> Result<(Vec<RgbaImage>, u32, u32), String> {
     if paths.is_empty() {
@@ -94,9 +118,24 @@ fn create_mp4_from_frames(
 ) -> Result<(), String> {
     use ffmpeg_sidecar::command::FfmpegCommand;
 
-    // Create a temporary file list for ffmpeg concat
-    let tmp_dir = std::env::temp_dir().join("imechen_frames");
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    if image_paths.is_empty() {
+        return Err("No images provided".to_string());
+    }
+
+    // A fixed name in the shared temp dir could be pre-created (or symlinked) by
+    // another user, and stale frames from a crashed run would leak into the
+    // sequence. `create_dir` fails instead of reusing an existing path.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "imechen_frames_{}_{}",
+        std::process::id(),
+        nanos
+    ));
+    std::fs::create_dir(&tmp_dir).map_err(|e| e.to_string())?;
+    let _guard = TempDirGuard(tmp_dir.clone());
 
     // Create symlinks/copies with sequential names for ffmpeg
     let ext = Path::new(&image_paths[0])
@@ -130,15 +169,11 @@ fn create_mp4_from_frames(
     for event in iter {
         if let ffmpeg_sidecar::event::FfmpegEvent::Error(e) = event {
             if e.contains("Error") || e.contains("Invalid") {
-                // Cleanup temp
-                let _ = std::fs::remove_dir_all(&tmp_dir);
                 return Err(format!("ffmpeg error: {}", e));
             }
         }
     }
 
-    // Cleanup temp
-    let _ = std::fs::remove_dir_all(&tmp_dir);
     Ok(())
 }
 
@@ -156,9 +191,13 @@ pub async fn create_animation(
             "mp4" => "mp4",
             _ => return Err(format!("Unsupported format: {}", request.output_format)),
         };
+        if request.fps == 0 {
+            return Err("fps must be at least 1".to_string());
+        }
+        let output_name = validate_output_name(&request.output_name)?;
 
         let output_path: PathBuf =
-            Path::new(&request.output_dir).join(format!("{}.{}", request.output_name, ext));
+            Path::new(&request.output_dir).join(format!("{}.{}", output_name, ext));
 
         match request.output_format.to_lowercase().as_str() {
             "gif" => {
@@ -187,4 +226,58 @@ pub async fn create_animation(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_output_name_accepts_bare_file_name() {
+        assert_eq!(validate_output_name("animation"), Ok("animation"));
+        assert_eq!(validate_output_name("my anim.v2"), Ok("my anim.v2"));
+    }
+
+    #[test]
+    fn validate_output_name_rejects_names_that_escape_output_dir() {
+        for name in ["", ".", "..", "../evil", "a/b", "/etc/passwd", "a\\b", "..\\evil"] {
+            assert!(validate_output_name(name).is_err(), "accepted {:?}", name);
+        }
+    }
+
+    fn frame_dirs() -> Vec<PathBuf> {
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("imechen_frames_"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn create_mp4_from_frames_encodes_and_removes_its_temp_dir() {
+        let work = std::env::temp_dir().join(format!("imechen_anim_test_{}", std::process::id()));
+        std::fs::create_dir_all(&work).unwrap();
+        let _work_guard = TempDirGuard(work.clone());
+
+        let paths: Vec<String> = (0..3u8)
+            .map(|i| {
+                let p = work.join(format!("f{}.png", i));
+                RgbaImage::from_pixel(16, 16, image::Rgba([i * 80, 0, 0, 255]))
+                    .save(&p)
+                    .unwrap();
+                p.to_string_lossy().to_string()
+            })
+            .collect();
+        let before = frame_dirs();
+        let out = work.join("out.mp4");
+
+        create_mp4_from_frames(&paths, &out, 10).expect("create_mp4_from_frames failed");
+
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+        let leaked: Vec<_> = frame_dirs().into_iter().filter(|d| !before.contains(d)).collect();
+        assert!(leaked.is_empty(), "temp frame dirs left behind: {:?}", leaked);
+    }
 }
