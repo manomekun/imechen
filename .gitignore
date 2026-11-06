@@ -4,6 +4,7 @@ dist
 
 # Rust
 /target
+/crates/imechen-gpui/target
 
 # Bun
 bun.lockb

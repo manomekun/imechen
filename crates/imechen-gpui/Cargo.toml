@@ -6,6 +6,8 @@ authors = ["manomekun"]
 edition = "2021"
 publish = false
 
+[workspace]
+
 [[bin]]
 name = "imechen-gpui"
 path = "src/main.rs"

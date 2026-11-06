@@ -3,9 +3,8 @@ name: GPUI prototype
 on:
   pull_request:
     paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
+      - "crates/imechen-core/**"
+      - "crates/imechen-gpui/**"
       - ".github/workflows/gpui-prototype.yml"
   workflow_dispatch:
 
@@ -20,18 +19,23 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-24.04, windows-latest]
+    defaults:
+      run:
+        working-directory: crates/imechen-gpui
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # gpui-pre 0.3.11 uses library APIs that only recent stable toolchains have stabilized.
+      # Must match crates/imechen-gpui/rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: stable
+          toolchain: 1.99.1
           components: clippy
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: crates/imechen-gpui
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -41,9 +45,9 @@ jobs:
             gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
             libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan1
 
-      - run: cargo build -p imechen-gpui --locked
+      - run: cargo build --locked
 
       # --no-deps keeps imechen-core out of -D warnings; it is not part of this prototype.
-      - run: cargo clippy -p imechen-gpui --locked --no-deps -- -D warnings
+      - run: cargo clippy --locked --no-deps -- -D warnings
 
-      - run: cargo test -p imechen-gpui --locked
+      - run: cargo test --locked
