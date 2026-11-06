@@ -1,3 +1,4 @@
+use crate::output::OutputReservation;
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{imageops::FilterType, Frame, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -193,8 +194,8 @@ pub fn create_animation(request: CreateAnimationRequest) -> Result<CreateAnimati
     }
     let output_name = validate_output_name(&request.output_name)?;
 
-    let output_path: PathBuf =
-        Path::new(&request.output_dir).join(format!("{}.{}", output_name, ext));
+    let reservation = OutputReservation::reserve(Path::new(&request.output_dir), output_name, ext)?;
+    let output_path = reservation.path().to_path_buf();
 
     match request.output_format.to_lowercase().as_str() {
         "gif" => {
@@ -214,6 +215,8 @@ pub fn create_animation(request: CreateAnimationRequest) -> Result<CreateAnimati
     let output_size = std::fs::metadata(&output_path)
         .map_err(|e| e.to_string())?
         .len();
+
+    let output_path = reservation.commit();
 
     Ok(CreateAnimationResult {
         output_path: output_path.to_string_lossy().to_string(),
@@ -360,5 +363,29 @@ mod tests {
         let err = create_animation(request(&dir, paths, "apng", 10)).unwrap_err();
 
         assert!(err.contains("Unsupported format"), "{}", err);
+    }
+
+    #[test]
+    fn existing_animation_is_not_overwritten() {
+        let (dir, _guard) = work_dir("exists");
+        let paths = write_frames(&dir, 2);
+        std::fs::write(dir.join("anim.gif"), b"keep me").unwrap();
+
+        let result =
+            create_animation(request(&dir, paths, "gif", 10)).expect("create_animation failed");
+
+        assert_eq!(Path::new(&result.output_path), dir.join("anim(1).gif"));
+        assert_eq!(std::fs::read(dir.join("anim.gif")).unwrap(), b"keep me");
+        assert!(result.output_size > 0);
+    }
+
+    #[test]
+    fn failed_animation_leaves_no_reserved_file() {
+        let (dir, _guard) = work_dir("failed");
+        let missing = vec![dir.join("missing.png").to_string_lossy().to_string()];
+
+        assert!(create_animation(request(&dir, missing, "gif", 10)).is_err());
+
+        assert!(!dir.join("anim.gif").exists());
     }
 }

@@ -1,7 +1,8 @@
+use crate::output::OutputReservation;
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::FfmpegEvent;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct ConvertVideoRequest {
@@ -167,7 +168,8 @@ pub fn convert_video(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let output_path: PathBuf = Path::new(&request.output_dir).join(format!("{}.{}", stem, ext));
+    let reservation = OutputReservation::reserve(Path::new(&request.output_dir), &stem, ext)?;
+    let output_path = reservation.path().to_path_buf();
     let output_path_str = output_path.to_string_lossy().to_string();
 
     let codec = get_video_codec_for_format(&request.output_format);
@@ -247,6 +249,12 @@ pub fn convert_video(
     let output_size = std::fs::metadata(&output_path)
         .map_err(|e| e.to_string())?
         .len();
+    // The reservation is an empty file, so ffmpeg exiting without writing
+    // anything would otherwise look like a successful empty conversion.
+    if output_size == 0 {
+        return Err("ffmpeg produced no output".to_string());
+    }
+    reservation.commit();
 
     Ok(ConvertVideoResult {
         output_path: output_path_str,
@@ -347,6 +355,7 @@ pub fn ensure_ffmpeg() -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_input_format_extracts_format_from_plain_line() {
@@ -557,5 +566,45 @@ mod tests {
             assert!(!progress.is_empty(), "no progress reported for {}", format);
             assert!(progress.iter().all(|p| (0.0..=100.0).contains(&p.percent)));
         }
+    }
+
+    #[test]
+    fn convert_video_in_the_source_directory_keeps_the_source_intact() {
+        let (clip, _guard, dir) = generate_clip("inplace", 1);
+        let before = std::fs::read(&clip).unwrap();
+        let request = ConvertVideoRequest {
+            source_path: clip.clone(),
+            output_format: "mp4".to_string(),
+            output_dir: dir.to_string_lossy().to_string(),
+            quality: None,
+            resize_width: None,
+            resize_height: None,
+        };
+
+        let result = convert_video(request, |_| {}).expect("convert_video failed");
+
+        assert_eq!(Path::new(&result.output_path), dir.join("clip(1).mp4"));
+        assert_eq!(std::fs::read(&clip).unwrap(), before);
+        assert!(result.output_size > 0);
+    }
+
+    #[test]
+    fn failed_video_conversion_leaves_no_reserved_file() {
+        let (clip, _guard, dir) = generate_clip("failed", 1);
+        let out_dir = dir.join("out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        // h264 caps frame size, so ffmpeg fails after the name is reserved.
+        let request = ConvertVideoRequest {
+            source_path: clip,
+            output_format: "mp4".to_string(),
+            output_dir: out_dir.to_string_lossy().to_string(),
+            quality: None,
+            resize_width: Some(100_000),
+            resize_height: Some(100_000),
+        };
+
+        assert!(convert_video(request, |_| {}).is_err());
+
+        assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 0);
     }
 }

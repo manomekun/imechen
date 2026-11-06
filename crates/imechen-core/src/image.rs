@@ -1,7 +1,8 @@
+use crate::output::OutputReservation;
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct ConvertImageRequest {
@@ -223,7 +224,8 @@ pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult,
     let ext = format_extension(target_format);
 
     let stem = source.file_stem().unwrap_or_default().to_string_lossy();
-    let output_path: PathBuf = Path::new(&request.output_dir).join(format!("{}.{}", stem, ext));
+    let reservation = OutputReservation::reserve(Path::new(&request.output_dir), &stem, ext)?;
+    let output_path = reservation.path().to_path_buf();
 
     match target_format {
         ImageFormat::Jpeg => {
@@ -252,6 +254,7 @@ pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult,
     let output_size = std::fs::metadata(&output_path)
         .map_err(|e| e.to_string())?
         .len();
+    let output_path = reservation.commit();
 
     Ok(ConvertImageResult {
         output_path: output_path.to_string_lossy().to_string(),
@@ -265,6 +268,7 @@ pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     struct TempDir(PathBuf);
 
@@ -379,7 +383,13 @@ mod tests {
             ("PNG", "png"),
             ("webp", "webp"),
         ] {
-            let req = request(&source, &dir, format);
+            let mut req = request(&source, &dir, format);
+            req.output_dir = dir
+                .path()
+                .join(format!("out_{}", format))
+                .to_string_lossy()
+                .to_string();
+            std::fs::create_dir_all(&req.output_dir).unwrap();
             let expected = Path::new(&req.output_dir).join(format!("photo.{}", ext));
 
             let result = convert_image(req).expect("convert_image failed");
@@ -445,5 +455,104 @@ mod tests {
         let thumb = image::load_from_memory_with_format(&info.thumbnail_png, ImageFormat::Png)
             .expect("thumbnail is not a PNG");
         assert!(thumb.width() <= THUMBNAIL_MAX && thumb.height() <= THUMBNAIL_MAX);
+    }
+
+    fn same_dir_request(source: &str, dir: &TempDir, format: &str) -> ConvertImageRequest {
+        let mut req = request(source, dir, format);
+        req.output_dir = dir.path().to_string_lossy().to_string();
+        req
+    }
+
+    #[test]
+    fn existing_output_is_not_overwritten_and_gets_a_number() {
+        let dir = TempDir::new("exists");
+        let source = write_source(&dir, "photo.png", 16, 16);
+        std::fs::write(dir.path().join("photo.webp"), b"keep me").unwrap();
+
+        let first = convert_image(same_dir_request(&source, &dir, "webp")).unwrap();
+        let second = convert_image(same_dir_request(&source, &dir, "webp")).unwrap();
+
+        assert_eq!(
+            Path::new(&first.output_path),
+            dir.path().join("photo(1).webp")
+        );
+        assert_eq!(
+            Path::new(&second.output_path),
+            dir.path().join("photo(2).webp")
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("photo.webp")).unwrap(),
+            b"keep me"
+        );
+    }
+
+    #[test]
+    fn same_stem_inputs_in_one_batch_do_not_overwrite_each_other() {
+        let dir = TempDir::new("batch");
+        let jpg = dir.path().join("a.jpg").to_string_lossy().to_string();
+        image::RgbImage::from_pixel(16, 16, image::Rgb([200, 10, 10]))
+            .save(&jpg)
+            .unwrap();
+        let png = write_source(&dir, "a.png", 24, 24);
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+
+        let first = convert_image(request(&jpg, &dir, "webp")).unwrap();
+        let second = convert_image(request(&png, &dir, "webp")).unwrap();
+
+        let out = dir.path().join("out");
+        assert_eq!(Path::new(&first.output_path), out.join("a.webp"));
+        assert_eq!(Path::new(&second.output_path), out.join("a(1).webp"));
+        assert_eq!(image::open(&first.output_path).unwrap().width(), 16);
+        assert_eq!(image::open(&second.output_path).unwrap().width(), 24);
+    }
+
+    #[test]
+    fn converting_in_place_to_the_same_format_keeps_the_source_intact() {
+        let dir = TempDir::new("inplace");
+        let source = write_source(&dir, "photo.png", 32, 32);
+        let before = std::fs::read(&source).unwrap();
+
+        let result = convert_image(same_dir_request(&source, &dir, "png")).unwrap();
+
+        assert_eq!(
+            Path::new(&result.output_path),
+            dir.path().join("photo(1).png")
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        assert!(image::open(&result.output_path).is_ok());
+    }
+
+    #[test]
+    fn dotted_source_name_keeps_its_dots_before_the_number() {
+        let dir = TempDir::new("dotted");
+        let source = write_source(&dir, "my.photo.png", 16, 16);
+        std::fs::write(dir.path().join("my.photo.webp"), b"x").unwrap();
+
+        let result = convert_image(same_dir_request(&source, &dir, "webp")).unwrap();
+
+        assert_eq!(
+            Path::new(&result.output_path),
+            dir.path().join("my.photo(1).webp")
+        );
+    }
+
+    #[test]
+    fn failed_conversion_leaves_no_reserved_file() {
+        let dir = TempDir::new("failed");
+        let source = write_source(&dir, "photo.png", 16, 16);
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        // JPEG is limited to 65535 px per side, so the encoder fails only
+        // after the output name has been reserved.
+        let mut req = request(&source, &dir, "jpeg");
+        req.resize_width = Some(70_000);
+        req.keep_aspect_ratio = Some(false);
+
+        let result = convert_image(req);
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("out")).unwrap().count(),
+            0
+        );
     }
 }
