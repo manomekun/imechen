@@ -1,56 +1,40 @@
+import { For } from "solid-js";
 import { useTheme, type ThemeMode } from "../stores/theme";
+import Icon, { type IconName } from "../components/ui/Icon";
+import styles from "./Settings.module.css";
+
+const themes: { mode: ThemeMode; label: string; icon: IconName }[] = [
+  { mode: "dark", label: "ダーク", icon: "moon" },
+  { mode: "light", label: "ライト", icon: "sun" },
+  { mode: "system", label: "システム", icon: "monitor" },
+];
 
 export default function Settings() {
   const { themeMode, setThemeMode } = useTheme();
 
-  const themes: { mode: ThemeMode; label: string; icon: string }[] = [
-    { mode: "dark", label: "ダーク", icon: "🌙" },
-    { mode: "light", label: "ライト", icon: "☀️" },
-    { mode: "system", label: "システム", icon: "🖥️" },
-  ];
-
   return (
-    <>
-      <header style={{ display: "flex", "justify-content": "space-between", "align-items": "center" }}>
-        <h1 style={{ "font-size": "24px", "font-weight": 600 }}>設定</h1>
-        <span style={{ "font-size": "13px", color: "var(--text-secondary)" }}>アプリケーションの設定</span>
-      </header>
-      <div style={{ display: "flex", "flex-direction": "column", gap: "24px", "max-width": "560px" }}>
-        <div class="glass" style={{ "border-radius": "var(--radius-lg)", padding: "20px", display: "flex", "flex-direction": "column", gap: "16px" }}>
-          <span style={{ "font-weight": 600, "font-size": "14px" }}>テーマ</span>
-          <span style={{ "font-size": "13px", color: "var(--text-secondary)" }}>アプリの外観テーマを選択してください</span>
-          <div style={{ display: "flex", gap: "12px" }}>
-            {themes.map((t) => (
+    <div class={styles.page}>
+      <h1 class={styles.title}>設定</h1>
+      <section class={styles.section}>
+        <h2 class={styles.heading}>テーマ</h2>
+        <p class={styles.desc}>アプリの外観テーマを選択してください</p>
+        <div class={styles.options}>
+          <For each={themes}>
+            {(t) => (
               <button
+                type="button"
+                class={styles.option}
+                classList={{ [styles.optionActive]: themeMode() === t.mode }}
                 onClick={() => setThemeMode(t.mode)}
-                style={{
-                  flex: 1,
-                  padding: "16px",
-                  display: "flex",
-                  "flex-direction": "column",
-                  "align-items": "center",
-                  gap: "8px",
-                  "border-radius": "var(--radius-md)",
-                  background: "var(--bg-elevated)",
-                  border: themeMode() === t.mode ? "2px solid var(--accent)" : "1px solid var(--glass-border)",
-                  cursor: "pointer",
-                  color: "inherit",
-                }}
               >
-                <span style={{ "font-size": "24px" }}>{t.icon}</span>
-                <span style={{
-                  "font-size": "13px",
-                  "font-weight": themeMode() === t.mode ? 600 : 400,
-                  color: themeMode() === t.mode ? "var(--text-primary)" : "var(--text-secondary)",
-                }}>{t.label}</span>
+                <Icon name={t.icon} size={28} class={styles.optionIcon} />
+                <span class={styles.optionLabel}>{t.label}</span>
               </button>
-            ))}
-          </div>
+            )}
+          </For>
         </div>
-        <div style={{ color: "var(--text-muted)", "font-size": "12px" }}>
-          <span class="mono">imechen v0.1.0</span>
-        </div>
-      </div>
-    </>
+      </section>
+      <span class={styles.version}>imechen v0.1.0</span>
+    </div>
   );
 }

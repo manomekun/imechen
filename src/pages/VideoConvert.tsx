@@ -1,15 +1,24 @@
-import { createSignal, For, Show, onMount, onCleanup } from "solid-js";
+import { createSignal, Show, onMount, onCleanup } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
-import DropZone from "../components/ui/DropZone";
-import GlassCard from "../components/ui/GlassCard";
-import NeuSelect from "../components/ui/NeuSelect";
-import GradientButton from "../components/ui/GradientButton";
-import NeuButton from "../components/ui/NeuButton";
-import ProgressBar from "../components/ui/ProgressBar";
+import PageShell from "../components/ui/PageShell";
+import Toolbar from "../components/ui/Toolbar";
+import FileTable, {
+  nameColumn,
+  thumbColumn,
+  type Column,
+  type FileInfo,
+} from "../components/ui/FileTable";
+import ResultList, { type ConvertError } from "../components/ui/ResultList";
+import Footer, { batchStatus } from "../components/ui/Footer";
+import Field, { ValueBadge } from "../components/ui/Field";
+import Select from "../components/ui/Select";
+import { DimensionRow } from "../components/ui/Inputs";
+import Slider from "../components/ui/Slider";
+import PathPicker from "../components/ui/PathPicker";
 import PixelLoader from "../components/ui/PixelLoader";
-import FileListItem, { type FileInfo } from "../components/ui/FileListItem";
+import { useFileDrop, pickFiles } from "../components/ui/useFileDrop";
+import { useSelection } from "../components/ui/useSelection";
 import {
   getVideoInfo,
   convertVideo,
@@ -19,12 +28,9 @@ import {
   type ConvertVideoResult,
   type VideoProgress,
 } from "../lib/tauri";
+import styles from "./VideoConvert.module.css";
 
-interface ConvertError {
-  name: string;
-  path: string;
-  message: string;
-}
+type VideoFile = FileInfo & { width: number; height: number; duration: number };
 
 const videoFormats = [
   { value: "mp4", label: "MP4" },
@@ -40,6 +46,14 @@ const resolutionPresets = [
   { value: "720", label: "720p" },
   { value: "480", label: "480p" },
   { value: "custom", label: "カスタム" },
+];
+
+const columns: Column<VideoFile>[] = [
+  thumbColumn("video"),
+  nameColumn(),
+  { header: "解像度", width: "88px", nowrap: true, render: (f) => f.dimensions },
+  { header: "長さ", width: "52px", nowrap: true, render: (f) => formatDuration(f.duration) },
+  { header: "ファイルサイズ", width: "96px", nowrap: true, render: (f) => f.size },
 ];
 
 // Module-level: ffmpeg state persists across tab switches
@@ -63,7 +77,7 @@ async function checkFfmpeg() {
 }
 
 export default function VideoConvert() {
-  const [files, setFiles] = createSignal<(FileInfo & { width: number; height: number; duration: number })[]>([]);
+  const [files, setFiles] = createSignal<VideoFile[]>([]);
   const [outputFormat, setOutputFormat] = createSignal("mp4");
   const [outputDir, setOutputDir] = createSignal("~/Downloads");
   const [quality, setQuality] = createSignal(75);
@@ -74,6 +88,8 @@ export default function VideoConvert() {
   const [progress, setProgress] = createSignal(0);
   const [results, setResults] = createSignal<ConvertVideoResult[]>([]);
   const [errors, setErrors] = createSignal<ConvertError[]>([]);
+
+  const selection = useSelection(files, setFiles);
 
   onMount(() => checkFfmpeg());
 
@@ -113,9 +129,7 @@ export default function VideoConvert() {
     }
   };
 
-  const removeFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-  };
+  const isDragOver = useFileDrop(handleFilesSelected);
 
   const getResizeDimensions = () => {
     const preset = resolutionPreset();
@@ -185,318 +199,109 @@ export default function VideoConvert() {
     }
   };
 
+  const handlePresetChange = (v: string) => {
+    setResolutionPreset(v);
+    if (v === "original" && files().length > 0) {
+      setResizeWidth(String(files()[0].width));
+      setResizeHeight(String(files()[0].height));
+    } else if (v !== "custom" && v !== "original") {
+      const targetH = parseInt(v);
+      const f = files()[0];
+      if (f && f.height > 0) {
+        setResizeWidth(String(Math.round(targetH * f.width / f.height)));
+        setResizeHeight(String(targetH));
+      }
+    }
+  };
+
+  const status = () =>
+    batchStatus({
+      fileCount: files().length,
+      isConverting: isConverting(),
+      progress: progress(),
+      resultCount: results().length,
+      errorCount: errors().length,
+    });
+
   return (
     <>
-      <header
-        style={{
-          display: "flex",
-          "justify-content": "space-between",
-          "align-items": "center",
-        }}
-      >
-        <h1 style={{ "font-size": "24px", "font-weight": 600, "letter-spacing": "-0.5px" }}>
-          動画変換
-        </h1>
-        <span style={{ "font-size": "13px", color: "var(--text-secondary)" }}>
-          動画フォーマットを変換
-        </span>
-      </header>
-
-      <Show when={ffmpegLoading()}>
-        <div
-          class="glass"
-          style={{
-            padding: "12px 16px",
-            "border-radius": "var(--radius-md)",
-            "font-size": "13px",
-            color: "var(--accent)",
-            display: "flex",
-            "align-items": "center",
-            gap: "8px",
-          }}
-        >
-          ffmpeg を準備中...
-        </div>
-      </Show>
-
-      <div style={{ flex: 1, display: "flex", gap: "24px", "min-height": 0 }}>
-        {/* Left Column */}
-        <div style={{ flex: 1, display: "flex", "flex-direction": "column", gap: "20px" }}>
-          <DropZone
-            icon="video"
-            label="ここに動画ファイルをドロップまたはクリックして選択"
-            hint="MP4, MOV, AVI, WebM, FLV, HEVC"
-            onFilesSelected={handleFilesSelected}
+      <PageShell
+        title="動画変換"
+        notice={
+          <Show when={ffmpegLoading()}>
+            <div class={styles.notice}>ffmpeg を準備中...</div>
+          </Show>
+        }
+        toolbar={
+          <Toolbar
+            onAdd={() => pickFiles(handleFilesSelected)}
+            onDelete={selection.removeSelected}
+            deleteDisabled={selection.count() === 0}
           />
-
-          <GlassCard title="変換設定">
-            {/* Output Format */}
-            <div style={{ display: "flex", gap: "12px", "align-items": "center" }}>
-              <span style={{ "font-size": "12px", "font-weight": 500, color: "var(--text-secondary)", "letter-spacing": "0.5px" }}>
-                出力形式
-              </span>
-              <NeuSelect value={outputFormat()} onChange={setOutputFormat} options={videoFormats} style={{ width: "160px" }} />
-            </div>
-
-            {/* Save path */}
-            <div style={{ display: "flex", gap: "12px", "align-items": "center" }}>
-              <span style={{ "font-size": "12px", "font-weight": 500, color: "var(--text-secondary)", "letter-spacing": "0.5px" }}>
-                保存先
-              </span>
-              <div
-                class="glass"
-                style={{ flex: 1, padding: "10px 14px", "border-radius": "var(--radius-md)", "font-size": "13px", color: "var(--text-muted)", cursor: "pointer" }}
-                onClick={selectOutputDir}
-              >
-                {outputDir()}
-              </div>
-              <button
-                class="neu"
-                style={{ width: "36px", height: "36px", "border-radius": "var(--radius-sm)", border: "1px solid var(--glass-border)", display: "flex", "align-items": "center", "justify-content": "center", cursor: "pointer" }}
-                onClick={selectOutputDir}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M5 19a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 2h4a2 2 0 0 1 2 2v1M5 19h14a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2Z" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Resolution */}
-            <div style={{ display: "flex", "flex-direction": "column", gap: "10px" }}>
-              <span style={{ "font-size": "12px", "font-weight": 600, color: "var(--text-secondary)", "letter-spacing": "0.5px" }}>
-                解像度
-              </span>
-              <div style={{ display: "flex", gap: "12px", "align-items": "center", "flex-wrap": "wrap" }}>
-                <NeuSelect
-                  value={resolutionPreset()}
-                  onChange={(v) => {
-                    setResolutionPreset(v);
-                    if (v === "original" && files().length > 0) {
-                      setResizeWidth(String(files()[0].width));
-                      setResizeHeight(String(files()[0].height));
-                    } else if (v !== "custom" && v !== "original") {
-                      const targetH = parseInt(v);
-                      const f = files()[0];
-                      if (f && f.height > 0) {
-                        setResizeWidth(String(Math.round(targetH * f.width / f.height)));
-                        setResizeHeight(String(targetH));
-                      }
-                    }
-                  }}
-                  options={resolutionPresets}
-                  style={{ width: "160px" }}
-                />
-                <Show when={resolutionPreset() === "custom" || resolutionPreset() !== "original"}>
-                  <span style={{ "font-size": "11px", color: "var(--text-muted)" }}>自動入力 →</span>
-                  <input
-                    class="glass"
-                    type="number"
-                    placeholder="幅"
-                    value={resizeWidth()}
-                    onInput={(e) => setResizeWidth(e.currentTarget.value)}
-                    disabled={resolutionPreset() !== "custom"}
-                    style={{
-                      width: "80px", padding: "10px 14px", "border-radius": "var(--radius-md)", "font-size": "13px",
-                      color: "var(--text-primary)", background: "var(--bg-glass)", border: "1px solid var(--glass-border)", "font-family": "var(--font-ui)",
-                    }}
-                  />
-                  <span style={{ color: "var(--text-muted)", "font-size": "14px" }}>×</span>
-                  <input
-                    class="glass"
-                    type="number"
-                    placeholder="高さ"
-                    value={resizeHeight()}
-                    onInput={(e) => setResizeHeight(e.currentTarget.value)}
-                    disabled={resolutionPreset() !== "custom"}
-                    style={{
-                      width: "80px", padding: "10px 14px", "border-radius": "var(--radius-md)", "font-size": "13px",
-                      color: "var(--text-primary)", background: "var(--bg-glass)", border: "1px solid var(--glass-border)", "font-family": "var(--font-ui)",
-                    }}
-                  />
-                </Show>
-              </div>
-            </div>
-
-            {/* Quality */}
-            <div style={{ display: "flex", "flex-direction": "column", gap: "10px" }}>
-              <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center" }}>
-                <span style={{ "font-size": "12px", "font-weight": 600, color: "var(--text-secondary)", "letter-spacing": "0.5px" }}>
-                  画質
-                </span>
-                <span class="mono" style={{ "font-size": "12px", color: "var(--accent)" }}>{quality()}%</span>
-              </div>
-              <input
-                type="range"
-                min="1"
-                max="100"
-                value={quality()}
-                onInput={(e) => setQuality(parseInt(e.currentTarget.value))}
-                style={{ width: "100%", "accent-color": "var(--accent)" }}
+        }
+        panelTitle="書き出し設定"
+        panel={
+          <>
+            <Field label="出力形式">
+              <Select value={outputFormat()} onChange={setOutputFormat} options={videoFormats} />
+            </Field>
+            <Field label="解像度">
+              <Select
+                value={resolutionPreset()}
+                onChange={handlePresetChange}
+                options={resolutionPresets}
               />
-            </div>
-          </GlassCard>
-
-          {/* Action Area */}
-          <div style={{ display: "flex", "flex-direction": "column", gap: "16px" }}>
-            <div style={{ display: "flex", gap: "12px", "align-items": "center" }}>
-              <GradientButton
-                onClick={handleConvert}
-                disabled={files().length === 0 || isConverting() || !ffmpegReady()}
-              >
-                変換開始
-              </GradientButton>
-              <NeuButton disabled={!isConverting()}>一時停止</NeuButton>
-              <NeuButton disabled={!isConverting()}>キャンセル</NeuButton>
-            </div>
-            <Show when={isConverting() || progress() > 0}>
-              <div style={{ display: "flex", "flex-direction": "column", gap: "8px" }}>
-                <div style={{ display: "flex", "justify-content": "space-between" }}>
-                  <span
-                    style={{
-                      "font-size": "12px",
-                      color: !isConverting() && errors().length > 0
-                        ? "var(--error)"
-                        : "var(--text-secondary)",
-                    }}
-                  >
-                    {isConverting()
-                      ? "変換中..."
-                      : errors().length === 0
-                        ? "完了"
-                        : results().length === 0
-                          ? `失敗 (${errors().length}件)`
-                          : `完了 (${errors().length}件失敗)`}
-                  </span>
-                  <span class="mono" style={{ "font-size": "12px", color: "var(--accent)" }}>{progress()}%</span>
-                </div>
-                <ProgressBar percent={progress()} />
-              </div>
-            </Show>
-          </div>
-        </div>
-
-        {/* Right Column */}
-        <div style={{ width: "320px", display: "flex", "flex-direction": "column", gap: "20px", "min-height": 0 }}>
-          <GlassCard
-            title={`選択ファイル (${files().length})`}
-            style={{ flex: "1", overflow: "auto", "min-height": "0" }}
-          >
-            <Show
-              when={files().length > 0}
-              fallback={
-                <div style={{ flex: 1, display: "flex", "flex-direction": "column", "align-items": "center", "justify-content": "center", gap: "8px", padding: "32px 0" }}>
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2">
-                    <path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.934a.5.5 0 0 0-.777-.416L16 11Z M2 7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z" />
-                  </svg>
-                  <span style={{ "font-size": "13px", color: "var(--text-muted)" }}>ファイル未選択</span>
-                </div>
-              }
-            >
-              <div style={{ display: "flex", "flex-direction": "column", gap: "8px" }}>
-                <For each={files()}>
-                  {(file, i) => (
-                    <FileListItem file={{ ...file, dimensions: `${file.dimensions} · ${formatDuration(file.duration)}` }} iconType="video" onRemove={() => removeFile(i())} />
-                  )}
-                </For>
-              </div>
-            </Show>
-          </GlassCard>
-
-          <Show when={errors().length > 0}>
-            <GlassCard title={`エラー (${errors().length})`} style={{ "max-height": "200px", overflow: "auto" }}>
-              <div style={{ display: "flex", "flex-direction": "column", gap: "8px" }}>
-                <For each={errors()}>
-                  {(err) => (
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "10px",
-                        "align-items": "flex-start",
-                        padding: "8px 12px",
-                        background: "var(--bg-glass)",
-                        border: "1px solid var(--error)",
-                        "border-radius": "var(--radius-sm)",
-                      }}
-                    >
-                      <svg
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="var(--error)"
-                        stroke-width="2"
-                        style={{ "flex-shrink": 0, "margin-top": "2px" }}
-                      >
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="12" y1="8" x2="12" y2="12" />
-                        <line x1="12" y1="16" x2="12.01" y2="16" />
-                      </svg>
-                      <div style={{ flex: 1, "min-width": 0, display: "flex", "flex-direction": "column", gap: "2px" }}>
-                        <span
-                          style={{
-                            "font-size": "12px",
-                            "font-weight": 500,
-                            overflow: "hidden",
-                            "text-overflow": "ellipsis",
-                            "white-space": "nowrap",
-                          }}
-                          title={err.path}
-                        >
-                          {err.name}
-                        </span>
-                        <span
-                          style={{
-                            "font-size": "10px",
-                            color: "var(--error)",
-                            "word-break": "break-word",
-                          }}
-                        >
-                          {err.message}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </GlassCard>
-          </Show>
-
-          <Show when={results().length > 0}>
-            <GlassCard title={`出力 (${results().length})`} style={{ "max-height": "280px", overflow: "auto" }}>
-              <div style={{ display: "flex", "flex-direction": "column", gap: "8px" }}>
-                <For each={results()}>
-                  {(res) => (
-                    <div style={{ display: "flex", gap: "10px", "align-items": "center", padding: "8px 12px", background: "var(--bg-glass)", border: "1px solid var(--glass-border)", "border-radius": "var(--radius-sm)" }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" style={{ "flex-shrink": 0 }}>
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                        <path d="m9 11 3 3L22 4" />
-                      </svg>
-                      <div style={{ flex: 1, "min-width": 0, display: "flex", "flex-direction": "column", gap: "2px" }}>
-                        <span style={{ "font-size": "12px", "font-weight": 500, overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap" }}>
-                          {res.output_path.split("/").pop()}
-                        </span>
-                        <span class="mono" style={{ "font-size": "10px", color: "var(--success)" }}>
-                          {formatFileSize(res.original_size)} → {formatFileSize(res.output_size)}
-                        </span>
-                      </div>
-                      <button
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "4px", display: "flex", color: "var(--accent)" }}
-                        onClick={() => revealItemInDir(res.output_path)}
-                        title="出力先を開く"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </GlassCard>
-          </Show>
-        </div>
-      </div>
-
+              <Show when={resolutionPreset() === "custom" || resolutionPreset() !== "original"}>
+                <DimensionRow
+                  width={resizeWidth()}
+                  height={resizeHeight()}
+                  onWidth={setResizeWidth}
+                  onHeight={setResizeHeight}
+                  disabled={resolutionPreset() !== "custom"}
+                />
+              </Show>
+            </Field>
+            <Field label="画質" aside={<ValueBadge>{quality()}%</ValueBadge>}>
+              <Slider value={quality()} onChange={setQuality} />
+            </Field>
+            <Field label="保存先">
+              <PathPicker path={outputDir()} onSelect={selectOutputDir} />
+            </Field>
+          </>
+        }
+        footer={
+          <Footer
+            status={status().text}
+            statusError={status().error}
+            showProgress={status().showProgress}
+            progress={progress()}
+            ctaLabel="変換する"
+            ctaDisabled={files().length === 0 || isConverting() || !ffmpegReady()}
+            onCta={handleConvert}
+          />
+        }
+      >
+        <FileTable
+          files={files()}
+          columns={columns}
+          selection={selection}
+          isDragOver={isDragOver()}
+          empty={{
+            icon: "video",
+            label: "ここに動画ファイルをドロップまたはクリックして選択",
+            hint: "MP4, MOV, AVI, WebM, FLV, HEVC",
+          }}
+          onPick={() => pickFiles(handleFilesSelected)}
+        />
+        <ResultList
+          outputs={results().map((res) => ({
+            name: res.output_path.split("/").pop() ?? res.output_path,
+            detail: `${formatFileSize(res.original_size)} → ${formatFileSize(res.output_size)}`,
+            path: res.output_path,
+          }))}
+          errors={errors()}
+        />
+      </PageShell>
       <PixelLoader visible={isConverting()} label="動画変換中..." progress={progress()} />
     </>
   );
