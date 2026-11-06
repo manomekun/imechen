@@ -33,7 +33,7 @@ icons = [
 [package.metadata.packager.macos]
 minimum-system-version = "12.0"
 
-# Runtime counterparts of the -dev packages in .github/workflows/gpui-app.yml (Ubuntu 22.04 names).
+# Runtime counterparts of the -dev packages in .github/workflows/ci.yml (Ubuntu 22.04 names).
 [package.metadata.packager.deb]
 depends = [
   "libfontconfig1",

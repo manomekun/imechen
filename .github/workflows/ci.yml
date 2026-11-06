@@ -1,11 +1,13 @@
-name: GPUI app
+name: CI
 
 on:
   pull_request:
     paths:
-      - "crates/imechen-core/**"
-      - "crates/imechen-gpui/**"
-      - ".github/workflows/gpui-app.yml"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ci.yml"
       - ".github/workflows/package.yml"
   workflow_dispatch:
 
@@ -20,23 +22,18 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-24.04, windows-latest]
-    defaults:
-      run:
-        working-directory: crates/imechen-gpui
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      # Must match crates/imechen-gpui/rust-toolchain.toml.
+      # Must match rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
           components: clippy
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: crates/imechen-gpui
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -44,14 +41,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
-            libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan1
+            libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan1 \
+            ffmpeg
 
-      - run: cargo build --locked
+      # The video and animation tests in imechen-core spawn ffmpeg from PATH.
+      - name: Install ffmpeg
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install ffmpeg
+          else
+            choco install ffmpeg --yes --no-progress
+          fi
 
-      # --no-deps keeps imechen-core out of -D warnings; it is not part of this app.
-      - run: cargo clippy --locked --no-deps -- -D warnings
+      - run: cargo build --workspace --locked
 
-      - run: cargo test --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - run: cargo test --workspace --locked
 
   package:
     uses: ./.github/workflows/package.yml

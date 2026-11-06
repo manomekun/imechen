@@ -21,7 +21,7 @@ jobs:
       - name: Read version and check it against the tag
         id: version
         run: |
-          # Not `cargo metadata`: the crate's rust-toolchain.toml would make rustup download a toolchain just for this.
+          # Not `cargo metadata`: the repo's rust-toolchain.toml would make rustup download a toolchain just for this.
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/imechen-gpui/Cargo.toml | head -1)
           if [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match crates/imechen-gpui version v$version"

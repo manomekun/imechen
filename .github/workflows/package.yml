@@ -43,7 +43,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: crates/imechen-gpui
     env:
       # AppImage tools are themselves AppImages and the runner has no FUSE.
       APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -52,7 +51,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Must match crates/imechen-gpui/rust-toolchain.toml.
+      # Must match rust-toolchain.toml.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
@@ -60,7 +59,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: crates/imechen-gpui
           key: ${{ matrix.target }}
 
       - name: Install Linux dependencies
@@ -84,21 +82,22 @@ jobs:
         run: cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked -p imechen-gpui --target ${{ matrix.target }}
 
       - name: Package
-        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+        run: cargo packager -p imechen-gpui --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
 
       # Release asset names are consumed by install.sh, the Homebrew cask and the README.
       - name: Collect release assets
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "imechen-gpui") | .version')
           mkdir -p dist
           take() {
-            local src="packager-out/$1" dst="dist/$2"
+            # cargo-packager resolves out-dir against the crate, not the workspace root.
+            local src="crates/imechen-gpui/packager-out/$1" dst="dist/$2"
             if [ ! -f "$src" ]; then
               echo "::error::expected $src was not produced"
-              ls -R packager-out
+              ls -R crates/imechen-gpui/packager-out
               exit 1
             fi
             mv "$src" "$dst"
@@ -117,6 +116,6 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: imechen-${{ matrix.name }}
-          path: crates/imechen-gpui/dist/*
+          path: dist/*
           if-no-files-found: error
           retention-days: ${{ inputs.retention-days }}
