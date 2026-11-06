@@ -1,4 +1,4 @@
-use gpui::{div, point, prelude::*, px, BoxShadow, Context, FontWeight, SharedString, Window};
+use gpui::{div, prelude::*, px, Context, FontWeight, SharedString, Window};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Icon, Sizable as _};
 
@@ -46,15 +46,6 @@ impl SettingsPage {
             .cursor_pointer()
             .bg(if active { t.accent_tint } else { t.bg_field })
             .border_color(if active { t.accent } else { t.border_strong })
-            .when(active, |this| {
-                this.shadow(vec![BoxShadow {
-                    color: t.accent,
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(1.),
-                    inset: false,
-                }])
-            })
             .hover(|style| style.border_color(t.accent))
             .on_click(cx.listener(move |this, _, window, cx| this.select(mode, window, cx)))
             .child(Icon::new(icon).with_size(px(28.)).text_color(if active {
