@@ -1,3 +1,6 @@
+// Release builds would otherwise open a console window behind the GUI on Windows.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod components;
 mod media;

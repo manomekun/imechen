@@ -3166,6 +3166,7 @@ name = "imechen-gpui"
 version = "0.2.3"
 dependencies = [
  "dirs",
+ "embed-resource",
  "futures",
  "gpui-kit",
  "gpui-pre",
