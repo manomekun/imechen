@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
@@ -20,10 +20,9 @@ use crate::components::{
     PixelLoader, ResultList, Selection, Thumb, Toolbar, ValueBadge,
 };
 use crate::media::format_size;
-use crate::output::{default_output_dir, file_name, is_same_file, target_path};
+use crate::output::{default_output_dir, file_name};
 use crate::theme::{ActiveTokens as _, Tokens, RADIUS_SM};
 
-const SAME_PATH_MESSAGE: &str = "出力先が入力ファイルと同じです";
 const DEFAULT_QUALITY: f32 = 85.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,14 +62,6 @@ impl OutputFormat {
         }
     }
 
-    /// Must match the extension core gives its output file.
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Jpeg => "jpg",
-            other => other.request_name(),
-        }
-    }
-
     fn supports_quality(self) -> bool {
         matches!(self, Self::Jpeg | Self::Webp | Self::Png)
     }
@@ -81,14 +72,6 @@ fn progress_percent(done: usize, total: usize) -> u32 {
         return 0;
     }
     (done as f64 / total as f64 * 100.0).round() as u32
-}
-
-fn precheck(source: &Path, dir: &Path, format: OutputFormat) -> Result<(), &'static str> {
-    if is_same_file(source, &target_path(source, dir, format.extension())) {
-        Err(SAME_PATH_MESSAGE)
-    } else {
-        Ok(())
-    }
 }
 
 struct ImageFile {
@@ -300,22 +283,18 @@ impl ImagePage {
         cx.spawn(async move |this, cx| {
             let total = jobs.len();
             for (i, (path, name)) in jobs.into_iter().enumerate() {
-                let outcome = match precheck(&path, &output_dir, format) {
-                    Err(message) => Err(message.to_string()),
-                    Ok(()) => {
-                        let request = ConvertImageRequest {
-                            source_path: path.to_string_lossy().into_owned(),
-                            output_format: format.request_name().to_string(),
-                            output_dir: output_dir.to_string_lossy().into_owned(),
-                            quality: Some(quality),
-                            resize_width,
-                            resize_height,
-                            keep_aspect_ratio: Some(keep_aspect),
-                        };
-                        cx.background_spawn(async move { core_image::convert_image(request) })
-                            .await
-                    }
+                let request = ConvertImageRequest {
+                    source_path: path.to_string_lossy().into_owned(),
+                    output_format: format.request_name().to_string(),
+                    output_dir: output_dir.to_string_lossy().into_owned(),
+                    quality: Some(quality),
+                    resize_width,
+                    resize_height,
+                    keep_aspect_ratio: Some(keep_aspect),
                 };
+                let outcome = cx
+                    .background_spawn(async move { core_image::convert_image(request) })
+                    .await;
                 let updated = this.update(cx, |this, cx| {
                     match outcome {
                         Ok(result) => {
@@ -564,41 +543,10 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_output_uses_the_jpg_extension_like_core() {
-        assert_eq!(OutputFormat::Jpeg.request_name(), "jpeg");
-        assert_eq!(OutputFormat::Jpeg.extension(), "jpg");
-        assert_eq!(OutputFormat::Webp.extension(), "webp");
-    }
-
-    #[test]
     fn progress_is_rounded_to_the_nearest_percent() {
         assert_eq!(progress_percent(1, 3), 33);
         assert_eq!(progress_percent(2, 3), 67);
         assert_eq!(progress_percent(3, 3), 100);
         assert_eq!(progress_percent(0, 0), 0);
-    }
-
-    #[test]
-    fn converting_onto_the_source_file_is_rejected() {
-        let source = Path::new("/in/photo.png");
-        assert_eq!(
-            precheck(source, Path::new("/in"), OutputFormat::Png),
-            Err("出力先が入力ファイルと同じです")
-        );
-    }
-
-    #[test]
-    fn converting_to_another_format_in_the_same_dir_is_allowed() {
-        let source = Path::new("/in/photo.png");
-        assert_eq!(
-            precheck(source, Path::new("/in"), OutputFormat::Webp),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn jpeg_to_jpg_source_in_the_same_dir_is_rejected() {
-        let source = Path::new("/in/photo.jpg");
-        assert!(precheck(source, Path::new("/in"), OutputFormat::Jpeg).is_err());
     }
 }

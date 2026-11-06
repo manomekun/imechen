@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
@@ -21,10 +21,9 @@ use crate::components::{
     PageShell, PathPicker, PixelLoader, ResultList, Selection, Thumb, Toolbar,
 };
 use crate::media::format_size;
-use crate::output::{default_output_dir, file_name, is_same_file};
+use crate::output::{default_output_dir, file_name};
 use crate::theme::{ActiveTokens as _, Tokens, RADIUS_SM};
 
-const SAME_PATH_MESSAGE: &str = "出力先が入力ファイルと同じです";
 const DEFAULT_NAME: &str = "animation";
 const DEFAULT_FPS: u32 = 24;
 const FPS_RANGE: std::ops::RangeInclusive<u32> = 1..=60;
@@ -135,21 +134,6 @@ fn parse_fps(text: &str) -> Result<u32, &'static str> {
     match text.trim().parse::<u32>() {
         Ok(fps) if FPS_RANGE.contains(&fps) => Ok(fps),
         _ => Err("FPS は 1〜60 の整数で指定してください"),
-    }
-}
-
-fn output_path(dir: &Path, name: &str, format: AnimFormat) -> PathBuf {
-    dir.join(format!("{name}.{}", format.extension()))
-}
-
-fn collides_with_input<'a>(
-    inputs: impl IntoIterator<Item = &'a Path>,
-    target: &Path,
-) -> Result<(), &'static str> {
-    if inputs.into_iter().any(|input| is_same_file(input, target)) {
-        Err(SAME_PATH_MESSAGE)
-    } else {
-        Ok(())
     }
 }
 
@@ -354,12 +338,7 @@ impl AnimationPage {
         };
         let format = self.format;
         let output_dir = self.output_dir.clone();
-        let target = output_path(&output_dir, &name, format);
-        if let Err(message) =
-            collides_with_input(self.files.iter().map(|f| f.path.as_path()), &target)
-        {
-            return self.reject(message, cx);
-        }
+        let target = output_dir.join(format!("{name}.{}", format.extension()));
 
         self.notice = None;
         self.creating = true;
@@ -738,41 +717,6 @@ mod tests {
         for text in ["", "0", "61", "-1", "abc", "2.5", "99999999999"] {
             assert!(parse_fps(text).is_err(), "{text:?}");
         }
-    }
-
-    #[test]
-    fn output_path_uses_the_extension_core_writes() {
-        let dir = Path::new("/out");
-        assert_eq!(
-            output_path(dir, "anim", AnimFormat::Gif),
-            Path::new("/out/anim.gif")
-        );
-        assert_eq!(
-            output_path(dir, "anim", AnimFormat::Awebp),
-            Path::new("/out/anim.webp")
-        );
-        assert_eq!(
-            output_path(dir, "my.v2", AnimFormat::Mp4),
-            Path::new("/out/my.v2.mp4")
-        );
-    }
-
-    #[test]
-    fn output_onto_an_input_frame_is_rejected() {
-        let inputs = [Path::new("/in/f1.png"), Path::new("/in/animation.gif")];
-        assert_eq!(
-            collides_with_input(inputs, Path::new("/in/animation.gif")),
-            Err("出力先が入力ファイルと同じです")
-        );
-    }
-
-    #[test]
-    fn output_next_to_the_inputs_under_a_new_name_is_allowed() {
-        let inputs = [Path::new("/in/f1.png"), Path::new("/in/f2.png")];
-        assert_eq!(
-            collides_with_input(inputs, Path::new("/in/animation.gif")),
-            Ok(())
-        );
     }
 
     #[test]

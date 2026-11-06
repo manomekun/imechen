@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use futures::{channel::mpsc, StreamExt as _};
 use gpui::{
@@ -20,10 +20,9 @@ use crate::components::{
     Selection, Thumb, Toolbar, ValueBadge,
 };
 use crate::media::{format_duration, format_size};
-use crate::output::{default_output_dir, file_name, is_same_file, target_path};
+use crate::output::{default_output_dir, file_name};
 use crate::theme::{ActiveTokens as _, Tokens, RADIUS_SM};
 
-const SAME_PATH_MESSAGE: &str = "出力先が入力ファイルと同じです";
 const FFMPEG_UNAVAILABLE_MESSAGE: &str = "ffmpeg を利用できません";
 const DEFAULT_QUALITY: f32 = 75.0;
 
@@ -153,14 +152,6 @@ fn cta_disabled(file_count: usize, converting: bool, ffmpeg: &Ffmpeg) -> bool {
 
 fn percent_of(percent: f64) -> u32 {
     percent.round().clamp(0.0, 100.0) as u32
-}
-
-fn precheck(source: &Path, dir: &Path, format: VideoFormat) -> Result<(), &'static str> {
-    if is_same_file(source, &target_path(source, dir, format.extension())) {
-        Err(SAME_PATH_MESSAGE)
-    } else {
-        Ok(())
-    }
 }
 
 struct VideoFile {
@@ -471,37 +462,32 @@ impl VideoPage {
                     return;
                 }
 
-                let outcome = match precheck(&path, &output_dir, format) {
-                    Err(message) => Err(message.to_string()),
-                    Ok(()) => {
-                        let request = ConvertVideoRequest {
-                            source_path: path.to_string_lossy().into_owned(),
-                            output_format: format.extension().to_string(),
-                            output_dir: output_dir.to_string_lossy().into_owned(),
-                            quality: Some(quality),
-                            resize_width,
-                            resize_height,
-                        };
-                        // core reports progress from inside its blocking ffmpeg
-                        // loop; the channel carries it to this foreground task.
-                        let (tx, mut rx) = mpsc::unbounded::<f64>();
-                        let task = cx.background_spawn(async move {
-                            core_video::convert_video(request, move |progress| {
-                                tx.unbounded_send(progress.percent).ok();
-                            })
-                        });
-                        while let Some(percent) = rx.next().await {
-                            let updated = this.update(cx, |this, cx| {
-                                this.progress = percent_of(percent);
-                                cx.notify();
-                            });
-                            if updated.is_err() {
-                                return;
-                            }
-                        }
-                        task.await
-                    }
+                let request = ConvertVideoRequest {
+                    source_path: path.to_string_lossy().into_owned(),
+                    output_format: format.extension().to_string(),
+                    output_dir: output_dir.to_string_lossy().into_owned(),
+                    quality: Some(quality),
+                    resize_width,
+                    resize_height,
                 };
+                // core reports progress from inside its blocking ffmpeg
+                // loop; the channel carries it to this foreground task.
+                let (tx, mut rx) = mpsc::unbounded::<f64>();
+                let task = cx.background_spawn(async move {
+                    core_video::convert_video(request, move |progress| {
+                        tx.unbounded_send(progress.percent).ok();
+                    })
+                });
+                while let Some(percent) = rx.next().await {
+                    let updated = this.update(cx, |this, cx| {
+                        this.progress = percent_of(percent);
+                        cx.notify();
+                    });
+                    if updated.is_err() {
+                        return;
+                    }
+                }
+                let outcome = task.await;
 
                 let updated = this.update(cx, |this, cx| {
                     match outcome {
@@ -901,29 +887,5 @@ mod tests {
         assert_eq!(percent_of(100.0), 100);
         assert_eq!(percent_of(130.0), 100);
         assert_eq!(percent_of(-1.0), 0);
-    }
-
-    #[test]
-    fn converting_onto_the_source_file_is_rejected() {
-        assert_eq!(
-            precheck(
-                Path::new("/in/clip.mp4"),
-                Path::new("/in"),
-                VideoFormat::Mp4
-            ),
-            Err("出力先が入力ファイルと同じです")
-        );
-    }
-
-    #[test]
-    fn converting_to_another_format_in_the_same_dir_is_allowed() {
-        assert_eq!(
-            precheck(
-                Path::new("/in/clip.mp4"),
-                Path::new("/in"),
-                VideoFormat::Webm
-            ),
-            Ok(())
-        );
     }
 }
