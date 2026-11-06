@@ -6,6 +6,7 @@ on:
       - "crates/imechen-core/**"
       - "crates/imechen-gpui/**"
       - ".github/workflows/gpui-app.yml"
+      - ".github/workflows/package.yml"
   workflow_dispatch:
 
 permissions:
@@ -51,3 +52,8 @@ jobs:
       - run: cargo clippy --locked --no-deps -- -D warnings
 
       - run: cargo test --locked
+
+  package:
+    uses: ./.github/workflows/package.yml
+    with:
+      retention-days: 3

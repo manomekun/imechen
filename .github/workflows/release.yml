@@ -5,78 +5,85 @@ on:
     tags:
       - "v*"
 
-jobs:
-  release:
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin
-            rust_target: aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
-            rust_target: x86_64-apple-darwin
-          - platform: ubuntu-22.04
-            args: ""
-            rust_target: ""
-          - platform: windows-latest
-            args: ""
-            rust_target: ""
+permissions:
+  contents: read
 
-    runs-on: ${{ matrix.platform }}
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          targets: ${{ matrix.rust_target }}
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Read version and check it against the tag
+        id: version
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+          # Not `cargo metadata`: the crate's rust-toolchain.toml would make rustup download a toolchain just for this.
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/imechen-gpui/Cargo.toml | head -1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match crates/imechen-gpui version v$version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+  package:
+    needs: version
+    uses: ./.github/workflows/package.yml
+    with:
+      retention-days: 1
 
-      - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build and release
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  release:
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          tagName: __VERSION__
-          releaseName: "imechen __VERSION__"
-          releaseBody: |
-            ## インストール方法
+          pattern: imechen-*
+          path: assets
+          merge-multiple: true
 
-            ### macOS
-            Homebrew（推奨）: `brew install manomekun/apps/imechen`
+      - name: Create draft release
+        run: |
+          cat > notes.md <<'EOF'
+          ## インストール方法
 
-            ワンコマンド: `curl -fsSL https://raw.githubusercontent.com/manomekun/imechen/main/install.sh | bash`
+          ### macOS
+          Homebrew（推奨）: `brew install manomekun/apps/imechen`
 
-            ### Windows
-            EXE インストーラーをダウンロードして実行してください。
+          ワンコマンド: `curl -fsSL https://raw.githubusercontent.com/manomekun/imechen/main/install.sh | bash`
 
-            ### Linux
-            Debian/Ubuntu: `sudo dpkg -i imechen_*.deb`
-            AppImage: `chmod +x imechen_*.AppImage && ./imechen_*.AppImage`
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          ### Windows
+          EXE インストーラーをダウンロードして実行してください。
+
+          ### Linux
+          Debian/Ubuntu: `sudo dpkg -i imechen_*.deb`
+          AppImage: `chmod +x imechen_*.AppImage && ./imechen_*.AppImage`
+          EOF
+
+          for name in \
+            "imechen_${VERSION}_aarch64.dmg" \
+            "imechen_${VERSION}_x64.dmg" \
+            "imechen_${VERSION}_x64-setup.exe" \
+            "imechen_${VERSION}_amd64.deb" \
+            "imechen_${VERSION}_amd64.AppImage"; do
+            if [ ! -f "assets/$name" ]; then
+              echo "::error::missing release asset $name"
+              ls -l assets
+              exit 1
+            fi
+          done
+
+          gh release create "$VERSION" assets/* \
+            --draft \
+            --title "imechen $VERSION" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA"
