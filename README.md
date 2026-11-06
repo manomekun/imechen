@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/assets/icon.png" alt="imechen" height="80">
+  <img src="crates/imechen-gpui/assets/icon.png" alt="imechen" height="80">
   <p>画像・動画をかんたんに変換・圧縮できるデスクトップアプリ</p>
 
   <a href="https://github.com/manomekun/imechen/releases/latest">
@@ -126,9 +126,9 @@ chmod +x imechen_*.AppImage
 
 ### 技術スタック
 
-- **Tauri v2** — デスクトップアプリフレームワーク
-- **Solid.js** — フロントエンド（TypeScript）
-- **Rust** — バックエンド
+- **Rust** — アプリ全体（`crates/imechen-core` が変換ロジック、`crates/imechen-gpui` が UI）
+- **GPUI（gpui-pre）** — デスクトップ UI フレームワーク
+- **gpui-kit** — UI 部品
 - **image crate** — 画像処理
 - **imagequant + oxipng** — PNG 圧縮
 - **webp crate** — WebP エンコード
@@ -136,15 +136,18 @@ chmod +x imechen_*.AppImage
 
 ### 開発環境のセットアップ
 
+Rust のツールチェーンは `rust-toolchain.toml` で固定されており、rustup が自動で取得します。動画・アニメーションのテストには `ffmpeg` が PATH 上に必要です。
+
 ```bash
-# 依存関係のインストール
-bun install
+# 起動
+cargo run -p imechen-gpui
 
-# 開発サーバー起動
-bun run tauri dev
+# テスト
+cargo test --workspace
 
-# プロダクションビルド
-bun run tauri build
+# インストーラーの作成（cargo install cargo-packager --locked が必要）
+cargo build --release -p imechen-gpui
+cargo packager -p imechen-gpui --release
 ```
 
 ## ライセンス

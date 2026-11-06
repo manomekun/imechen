@@ -1,12 +1,8 @@
-# Frontend
-node_modules
-dist
-
 # Rust
-src-tauri/target
-
-# Bun
-bun.lockb
+/target
+# cargo-packager resolves out-dir against the crate, not the workspace root.
+/crates/imechen-gpui/packager-out
+/dist
 
 # OS
 .DS_Store
@@ -20,12 +16,6 @@ Thumbs.db
 
 # Pencil design files (large binary)
 *.pen
-
-# Template leftovers
-src/App.css
-src/assets/logo.svg
-public/tauri.svg
-public/vite.svg
 
 # Misc
 *.log

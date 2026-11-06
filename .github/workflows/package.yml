@@ -1,0 +1,121 @@
+name: Package
+
+on:
+  workflow_call:
+    inputs:
+      retention-days:
+        description: Days to keep the packaged artifacts
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+
+env:
+  # --locked on install pins the tool's own dependency tree, not just its version.
+  CARGO_PACKAGER_VERSION: 0.11.8
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            formats: dmg
+          - name: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            formats: dmg
+          # Oldest runner image on offer, to keep the glibc requirement low for the .deb/.AppImage.
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            formats: deb,appimage
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            formats: nsis
+    defaults:
+      run:
+        shell: bash
+    env:
+      # AppImage tools are themselves AppImages and the runner has no FUSE.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Must match rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
+            libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan1 \
+            libfuse2 file
+
+      - name: Cache cargo-packager
+        id: packager-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-packager${{ runner.os == 'Windows' && '.exe' || '' }}
+          key: cargo-packager-${{ env.CARGO_PACKAGER_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install cargo-packager
+        if: steps.packager-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-packager --version "$CARGO_PACKAGER_VERSION" --locked
+
+      - name: Build
+        run: cargo build --release --locked -p imechen-gpui --target ${{ matrix.target }}
+
+      - name: Package
+        run: cargo packager -p imechen-gpui --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+
+      # Release asset names are consumed by install.sh, the Homebrew cask and the README.
+      - name: Collect release assets
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "imechen-gpui") | .version')
+          mkdir -p dist
+          take() {
+            # cargo-packager resolves out-dir against the crate, not the workspace root.
+            local src="crates/imechen-gpui/packager-out/$1" dst="dist/$2"
+            if [ ! -f "$src" ]; then
+              echo "::error::expected $src was not produced"
+              ls -R crates/imechen-gpui/packager-out
+              exit 1
+            fi
+            mv "$src" "$dst"
+          }
+          case "${{ matrix.name }}" in
+            macos-aarch64) take "imechen_${version}_aarch64.dmg" "imechen_${version}_aarch64.dmg" ;;
+            macos-x64) take "imechen_${version}_x64.dmg" "imechen_${version}_x64.dmg" ;;
+            linux-x64)
+              take "imechen_${version}_amd64.deb" "imechen_${version}_amd64.deb"
+              take "imechen_${version}_x86_64.AppImage" "imechen_${version}_amd64.AppImage"
+              ;;
+            windows-x64) take "imechen_${version}_x64-setup.exe" "imechen_${version}_x64-setup.exe" ;;
+          esac
+          ls -l dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: imechen-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

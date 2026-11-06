@@ -1,0 +1,61 @@
+[package]
+name = "imechen-gpui"
+version = "0.2.3"
+description = "GPUI frontend for imechen"
+authors = ["manomekun"]
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "imechen"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.build-dependencies]
+# Already in the lockfile; embeds icons/icon.ico as the exe icon.
+embed-resource = "3"
+
+[package.metadata.packager]
+product-name = "imechen"
+identifier = "com.manomekun.imechen"
+category = "Utility"
+description = "Offline image/video converter"
+long-description = "A desktop application for converting and compressing images and videos completely offline. Supports JPEG, PNG, GIF, WebP, BMP, MP4, MOV, AVI, WebM, and animation creation."
+out-dir = "packager-out"
+icons = [
+  "icons/32x32.png",
+  "icons/128x128.png",
+  "icons/128x128@2x.png",
+  "icons/icon.icns",
+  "icons/icon.ico",
+]
+
+# 12.0 is the floor gpui-pre-apple compiles its Metal shaders for (-mmacosx-version-min).
+[package.metadata.packager.macos]
+minimum-system-version = "12.0"
+
+# Runtime counterparts of the -dev packages in .github/workflows/ci.yml (Ubuntu 22.04 names).
+[package.metadata.packager.deb]
+depends = [
+  "libfontconfig1",
+  "libwayland-client0",
+  "libxkbcommon0",
+  "libxkbcommon-x11-0",
+  "libx11-xcb1",
+  "libxcb1",
+  "libvulkan1",
+  "libssl3",
+  "libzstd1",
+  "libasound2",
+]
+
+[dependencies]
+imechen-core = { path = "../imechen-core" }
+# Must stay on the snapshot gpui-kit builds against, or two gpui copies end up in the tree.
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+# Exact pin: every gpui-kit snapshot changes the API, and 0.9.0 is built against our gpui-pre.
+gpui-kit = "=0.9.0"
+# Already in the lockfile via imechen-core; saves hand-rolling per-OS config dirs.
+dirs = "5"
+# Already in the lockfile via gpui; carries ffmpeg progress from the worker thread.
+futures = "0.3"

@@ -1,8 +1,0 @@
-.notice {
-  align-self: flex-start;
-  padding: 8px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-tint);
-  color: var(--accent);
-  font-size: 13px;
-}
