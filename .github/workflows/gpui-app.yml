@@ -1,11 +1,11 @@
-name: GPUI prototype
+name: GPUI app
 
 on:
   pull_request:
     paths:
       - "crates/imechen-core/**"
       - "crates/imechen-gpui/**"
-      - ".github/workflows/gpui-prototype.yml"
+      - ".github/workflows/gpui-app.yml"
   workflow_dispatch:
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
 
       - run: cargo build --locked
 
-      # --no-deps keeps imechen-core out of -D warnings; it is not part of this prototype.
+      # --no-deps keeps imechen-core out of -D warnings; it is not part of this app.
       - run: cargo clippy --locked --no-deps -- -D warnings
 
       - run: cargo test --locked
