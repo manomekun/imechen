@@ -14,7 +14,7 @@ mod toolbar;
 
 pub use checkbox::Checkbox;
 pub use controls::{
-    dimension_input, parse_dimension, select_state, slider_state, themed_select, themed_slider,
+    dimension_input, parse_resize, select_state, slider_state, themed_select, themed_slider,
     DimensionRow, OptionSelect,
 };
 pub use field::{Field, NoteText, ValueBadge};

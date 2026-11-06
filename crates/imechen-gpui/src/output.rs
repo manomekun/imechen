@@ -1,5 +1,20 @@
 use std::path::{Path, PathBuf};
 
+use gpui::SharedString;
+
+pub fn default_output_dir() -> PathBuf {
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub fn file_name(path: &Path) -> SharedString {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+        .into()
+}
+
 /// Mirrors how core names its output (`<stem>.<ext>` inside `dir`). Core does
 /// not expose the path it will write, and the same-path guard must know it
 /// before converting.

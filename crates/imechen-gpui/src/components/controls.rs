@@ -81,6 +81,14 @@ pub fn parse_dimension(text: &str) -> Result<Option<u32>, InvalidDimension> {
     }
 }
 
+/// Resize fields are validated before the batch starts so a typo is reported
+/// once, instead of as the same error on every file.
+pub fn parse_resize(width: &str, height: &str) -> Result<(Option<u32>, Option<u32>), &'static str> {
+    let width = parse_dimension(width).map_err(|_| "幅は1以上の整数で指定してください")?;
+    let height = parse_dimension(height).map_err(|_| "高さは1以上の整数で指定してください")?;
+    Ok((width, height))
+}
+
 #[derive(IntoElement)]
 pub struct DimensionRow {
     width: Entity<InputState>,
@@ -150,5 +158,28 @@ mod tests {
         assert_eq!(parse_dimension("12a"), Err(InvalidDimension));
         assert_eq!(parse_dimension("-5"), Err(InvalidDimension));
         assert_eq!(parse_dimension("99999999999"), Err(InvalidDimension));
+    }
+
+    #[test]
+    fn empty_resize_fields_request_no_resize() {
+        assert_eq!(parse_resize("", ""), Ok((None, None)));
+    }
+
+    #[test]
+    fn single_resize_field_leaves_the_other_unset() {
+        assert_eq!(parse_resize("800", ""), Ok((Some(800), None)));
+        assert_eq!(parse_resize("", "600"), Ok((None, Some(600))));
+    }
+
+    #[test]
+    fn invalid_resize_value_names_the_offending_field() {
+        assert_eq!(
+            parse_resize("0", "10"),
+            Err("幅は1以上の整数で指定してください")
+        );
+        assert_eq!(
+            parse_resize("10", "x"),
+            Err("高さは1以上の整数で指定してください")
+        );
     }
 }

@@ -14,13 +14,13 @@ use imechen_core::image::{self as core_image, ConvertImageRequest};
 
 use super::Page;
 use crate::components::{
-    batch_status, dimension_input, parse_dimension, select_state, slider_state, text_cell,
+    batch_status, dimension_input, parse_resize, select_state, slider_state, text_cell,
     themed_select, themed_slider, BatchState, CheckState, Checkbox, Column, ConvertError,
     DimensionRow, Field, FileRow, FileTable, Footer, NoteText, OutputItem, PageShell, PathPicker,
     PixelLoader, ResultList, Selection, Thumb, Toolbar, ValueBadge,
 };
 use crate::media::format_size;
-use crate::output::{is_same_file, target_path};
+use crate::output::{default_output_dir, file_name, is_same_file, target_path};
 use crate::theme::{ActiveTokens as _, Tokens, RADIUS_SM};
 
 const SAME_PATH_MESSAGE: &str = "出力先が入力ファイルと同じです";
@@ -76,14 +76,6 @@ impl OutputFormat {
     }
 }
 
-/// Resize fields are validated before the batch starts so a typo is reported
-/// once, instead of as the same error on every file.
-fn resize_request(width: &str, height: &str) -> Result<(Option<u32>, Option<u32>), &'static str> {
-    let width = parse_dimension(width).map_err(|_| "幅は1以上の整数で指定してください")?;
-    let height = parse_dimension(height).map_err(|_| "高さは1以上の整数で指定してください")?;
-    Ok((width, height))
-}
-
 fn progress_percent(done: usize, total: usize) -> u32 {
     if total == 0 {
         return 0;
@@ -97,19 +89,6 @@ fn precheck(source: &Path, dir: &Path, format: OutputFormat) -> Result<(), &'sta
     } else {
         Ok(())
     }
-}
-
-fn default_output_dir() -> PathBuf {
-    dirs::download_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn file_name(path: &Path) -> SharedString {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
-        .into()
 }
 
 struct ImageFile {
@@ -292,7 +271,7 @@ impl ImagePage {
             return;
         }
         let (resize_width, resize_height) =
-            match resize_request(&self.width.read(cx).value(), &self.height.read(cx).value()) {
+            match parse_resize(&self.width.read(cx).value(), &self.height.read(cx).value()) {
                 Ok(resize) => resize,
                 Err(message) => {
                     self.notice = Some(message.into());
@@ -589,29 +568,6 @@ mod tests {
         assert_eq!(OutputFormat::Jpeg.request_name(), "jpeg");
         assert_eq!(OutputFormat::Jpeg.extension(), "jpg");
         assert_eq!(OutputFormat::Webp.extension(), "webp");
-    }
-
-    #[test]
-    fn empty_resize_fields_request_no_resize() {
-        assert_eq!(resize_request("", ""), Ok((None, None)));
-    }
-
-    #[test]
-    fn single_resize_field_leaves_the_other_unset() {
-        assert_eq!(resize_request("800", ""), Ok((Some(800), None)));
-        assert_eq!(resize_request("", "600"), Ok((None, Some(600))));
-    }
-
-    #[test]
-    fn invalid_resize_value_names_the_offending_field() {
-        assert_eq!(
-            resize_request("0", "10"),
-            Err("幅は1以上の整数で指定してください")
-        );
-        assert_eq!(
-            resize_request("10", "x"),
-            Err("高さは1以上の整数で指定してください")
-        );
     }
 
     #[test]
