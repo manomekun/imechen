@@ -9,6 +9,8 @@ on:
       - "rust-toolchain.toml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/package.yml"
+      # Must stay last: a later pattern overrides earlier ones, so docs inside crates/ don't trigger a build.
+      - "!**/*.md"
   workflow_dispatch:
 
 permissions:
