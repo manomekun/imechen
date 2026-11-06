@@ -2002,17 +2002,25 @@ name = "imechen"
 version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
+ "imechen-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+]
+
+[[package]]
+name = "imechen-core"
+version = "0.2.3"
+dependencies = [
  "ffmpeg-sidecar",
  "image",
  "imagequant",
  "oxipng",
  "serde",
- "serde_json",
  "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
  "webp",
 ]
 

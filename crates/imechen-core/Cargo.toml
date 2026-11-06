@@ -1,0 +1,15 @@
+[package]
+name = "imechen-core"
+version = "0.2.3"
+description = "Conversion logic shared by imechen frontends"
+authors = ["manomekun"]
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+image = "0.25"
+imagequant = "4"
+oxipng = { version = "9", default-features = false, features = ["parallel"] }
+webp = "0.3"
+ffmpeg-sidecar = "2.7"
+sha2 = "0.10"
