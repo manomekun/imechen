@@ -31,7 +31,7 @@ impl Imechen {
         Self {
             page: Page::Image,
             logo: crate::sidebar::logo(),
-            image: cx.new(|_| ImagePage),
+            image: cx.new(|cx| ImagePage::new(window, cx)),
             video: cx.new(|_| VideoPage),
             animation: cx.new(|_| AnimationPage),
             settings: cx.new(|_| SettingsPage),
