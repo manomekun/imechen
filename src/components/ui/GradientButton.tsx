@@ -9,6 +9,7 @@ interface GradientButtonProps extends ParentProps {
 export default function GradientButton(props: GradientButtonProps) {
   return (
     <button
+      type="button"
       class={styles.btn}
       onClick={props.onClick}
       disabled={props.disabled}
