@@ -1,7 +1,7 @@
 mod app;
-// Helpers are consumed by the file-list pages as they land.
-#[allow(dead_code)]
+mod components;
 mod media;
+mod output;
 mod pages;
 mod settings;
 mod sidebar;
@@ -12,7 +12,7 @@ use gpui_kit::assets::{icon_assets, Assets};
 
 // The default bundle lacks these icons, and `Assets` errors instead of
 // returning `None` for unknown paths, so the extras must be tried first.
-icon_assets!(ExtraIcons, [Image, Video, Layers, Monitor]);
+icon_assets!(ExtraIcons, [Image, Video, Layers, Monitor, Trash]);
 
 struct AppAssets;
 

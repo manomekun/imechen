@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use gpui::{
     linear_color_stop, linear_gradient, px, App, BoxShadow, Global, Hsla, Rgba, WindowAppearance,
 };
@@ -12,9 +10,7 @@ pub const RADIUS_SM: f32 = 6.0;
 pub const RADIUS_MD: f32 = 10.0;
 pub const RADIUS_LG: f32 = 12.0;
 
-/// Design tokens from the UI spec. The full set lives here even though each
-/// page reads only a subset.
-#[allow(dead_code)]
+/// Design tokens from the UI spec.
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
     pub dark: bool,
@@ -116,7 +112,6 @@ impl Tokens {
         }
     }
 
-    #[allow(dead_code)]
     pub fn shadow_sm(&self) -> BoxShadow {
         BoxShadow {
             color: if self.dark {
@@ -236,12 +231,6 @@ fn map_onto_kit(theme: &mut Theme, t: &Tokens) {
             linear_color_stop(t.accent, 1.),
         ),
     );
-
-    // Input paints this instead of `input` mixed with transparency, which
-    // would wash out the dark field background.
-    let mut highlight = (*theme.highlight_theme).clone();
-    highlight.style.editor_background = Some(t.bg_field);
-    theme.highlight_theme = Arc::new(highlight);
 }
 
 #[cfg(test)]
