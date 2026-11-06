@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/imechen-core", "src-tauri"]
-# A separate workspace keeps gpui-pre's toolchain floor and lockfile changes away from the shipping Tauri app.
+members = ["crates/imechen-core"]
+# A separate workspace keeps gpui-pre's toolchain floor and lockfile changes away from the shipping app.
 exclude = ["crates/imechen-gpui"]
 resolver = "2"

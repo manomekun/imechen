@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/assets/icon.png" alt="imechen" height="80">
+  <img src="crates/imechen-gpui/assets/icon.png" alt="imechen" height="80">
   <p>画像・動画をかんたんに変換・圧縮できるデスクトップアプリ</p>
 
   <a href="https://github.com/manomekun/imechen/releases/latest">

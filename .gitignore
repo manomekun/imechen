@@ -1,13 +1,6 @@
-# Frontend
-node_modules
-dist
-
 # Rust
 /target
 /crates/imechen-gpui/target
-
-# Bun
-bun.lockb
 
 # OS
 .DS_Store
@@ -21,12 +14,6 @@ Thumbs.db
 
 # Pencil design files (large binary)
 *.pen
-
-# Template leftovers
-src/App.css
-src/assets/logo.svg
-public/tauri.svg
-public/vite.svg
 
 # Misc
 *.log

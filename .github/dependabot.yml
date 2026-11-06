@@ -1,16 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: bun
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      frontend:
-        update-types: [minor, patch]
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
-
   - package-ecosystem: cargo
     directory: /
     schedule:
