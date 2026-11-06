@@ -94,6 +94,7 @@ pub struct DimensionRow {
     width: Entity<InputState>,
     height: Entity<InputState>,
     tokens: Tokens,
+    disabled: bool,
 }
 
 impl DimensionRow {
@@ -102,7 +103,13 @@ impl DimensionRow {
             width: width.clone(),
             height: height.clone(),
             tokens,
+            disabled: false,
         }
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 }
 
@@ -116,8 +123,13 @@ impl RenderOnce for DimensionRow {
                 .text_color(t.text_secondary)
                 .child(text)
         };
-        let input =
-            |state: &Entity<InputState>| div().flex_1().min_w_0().child(themed_input(state, t));
+        let disabled = self.disabled;
+        let input = |state: &Entity<InputState>| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(themed_input(state, t).disabled(disabled))
+        };
 
         div()
             .flex()

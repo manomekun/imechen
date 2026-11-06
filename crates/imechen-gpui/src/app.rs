@@ -32,7 +32,7 @@ impl Imechen {
             page: Page::Image,
             logo: crate::sidebar::logo(),
             image: cx.new(|cx| ImagePage::new(window, cx)),
-            video: cx.new(|_| VideoPage),
+            video: cx.new(|cx| VideoPage::new(window, cx)),
             animation: cx.new(|_| AnimationPage),
             settings: cx.new(|_| SettingsPage),
             _appearance_subscription: subscription,

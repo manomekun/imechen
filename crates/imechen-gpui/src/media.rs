@@ -11,8 +11,6 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
-// Used by the video page.
-#[allow(dead_code)]
 pub fn format_duration(secs: f64) -> String {
     let total = secs.max(0.0).round() as u64;
     let (h, m, s) = (total / 3600, total % 3600 / 60, total % 60);
