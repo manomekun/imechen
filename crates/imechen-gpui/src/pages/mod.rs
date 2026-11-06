@@ -56,14 +56,3 @@ pub fn page_title(title: impl Into<SharedString>, tokens: &Tokens) -> Div {
         .text_color(tokens.text_primary)
         .child(title.into())
 }
-
-/// Placeholder body shared by pages whose content has not been built yet.
-pub fn title_only(page: Page, tokens: &Tokens) -> Div {
-    div()
-        .size_full()
-        .bg(tokens.bg_base)
-        .pt(px(28.))
-        .px(px(24.))
-        .pb(px(16.))
-        .child(page_title(page.title(), tokens))
-}

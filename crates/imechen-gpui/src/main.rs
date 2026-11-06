@@ -12,7 +12,7 @@ use gpui_kit::assets::{icon_assets, Assets};
 
 // The default bundle lacks these icons, and `Assets` errors instead of
 // returning `None` for unknown paths, so the extras must be tried first.
-icon_assets!(ExtraIcons, [Image, Video, Layers, Monitor, Trash]);
+icon_assets!(ExtraIcons, [Image, Video, Layers, Monitor, Trash, Images]);
 
 struct AppAssets;
 
