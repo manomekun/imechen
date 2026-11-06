@@ -34,8 +34,12 @@ pub struct ImageInfo {
     pub thumbnail_png: Vec<u8>,
 }
 
+/// Frontends show thumbnails in a 110px-wide cell, so this covers 2x displays
+/// without them having to decode full-size sources once per row.
+pub const THUMBNAIL_MAX: u32 = 220;
+
 fn generate_thumbnail(img: &image::DynamicImage) -> Vec<u8> {
-    let thumb = img.thumbnail(72, 72);
+    let thumb = img.thumbnail(THUMBNAIL_MAX, THUMBNAIL_MAX);
     let mut buf = Cursor::new(Vec::new());
     thumb
         .write_to(&mut buf, ImageFormat::Png)
@@ -440,6 +444,6 @@ mod tests {
         assert_eq!(info.format, "png");
         let thumb = image::load_from_memory_with_format(&info.thumbnail_png, ImageFormat::Png)
             .expect("thumbnail is not a PNG");
-        assert!(thumb.width() <= 72 && thumb.height() <= 72);
+        assert!(thumb.width() <= THUMBNAIL_MAX && thumb.height() <= THUMBNAIL_MAX);
     }
 }

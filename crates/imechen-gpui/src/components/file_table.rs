@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::{
-    div, img, prelude::*, px, AnyElement, App, ExternalPaths, ObjectFit, Pixels, SharedString,
-    Window,
+    div, img, prelude::*, px, AnyElement, App, ExternalPaths, Image, ObjectFit, Pixels,
+    SharedString, Window,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Icon, Sizable as _};
@@ -65,7 +66,7 @@ impl Column {
 }
 
 pub enum Thumb {
-    Path(PathBuf),
+    Image(Arc<Image>),
     None,
 }
 
@@ -185,7 +186,7 @@ fn thumb_box(row_thumb: Thumb, fallback: IconName, t: &Tokens) -> impl IntoEleme
             .into_any_element()
     };
     let content = match row_thumb {
-        Thumb::Path(path) => img(path)
+        Thumb::Image(image) => img(image)
             .size_full()
             .object_fit(ObjectFit::Cover)
             .with_fallback(fallback_icon)

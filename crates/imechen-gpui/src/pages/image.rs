@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, Context, Entity, PathPromptOptions, ScrollHandle, SharedString,
-    Subscription, Window,
+    div, prelude::*, px, Context, Entity, Image, ImageFormat, PathPromptOptions, ScrollHandle,
+    SharedString, Subscription, Window,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::InputState;
@@ -113,6 +114,7 @@ fn file_name(path: &Path) -> SharedString {
 
 struct ImageFile {
     path: PathBuf,
+    thumbnail: Arc<Image>,
     name: SharedString,
     dimensions: SharedString,
     size: SharedString,
@@ -202,6 +204,10 @@ impl ImagePage {
                         .map(
                             |path| match core_image::get_image_info(&path.to_string_lossy()) {
                                 Ok(info) => Loaded::File(ImageFile {
+                                    thumbnail: Arc::new(Image::from_bytes(
+                                        ImageFormat::Png,
+                                        info.thumbnail_png,
+                                    )),
                                     name: info.name.into(),
                                     dimensions: format!("{}×{}", info.width, info.height).into(),
                                     size: format_size(info.size).into(),
@@ -377,7 +383,7 @@ impl ImagePage {
             .map(|file| FileRow {
                 path: file.path.clone(),
                 name: file.name.clone(),
-                thumb: Thumb::Path(file.path.clone()),
+                thumb: Thumb::Image(file.thumbnail.clone()),
                 selected: self.selection.contains(&file.path),
                 cells: vec![
                     text_cell(file.dimensions.clone()),
