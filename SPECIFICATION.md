@@ -101,11 +101,11 @@ png の場合は oxipng + pngquant
 
 | レイヤー | 技術 |
 |---|---|
-| フレームワーク | Tauri |
-| フロントエンド | Bun + Solid.js (TypeScript) + Vite |
-| バックエンド | Rust |
-| メディア処理 | `ffmpeg` crate |
-| 永続化 | JSONファイル（`settings.json`, `history.json`） |
+| 言語 | Rust |
+| フレームワーク | GPUI（`gpui-pre`） |
+| UI 部品 | `gpui-kit` |
+| メディア処理 | `ffmpeg-sidecar`（ffmpeg 実行ファイルを固定 URL + SHA-256 検証で取得） |
+| 永続化 | テーマ設定を設定ディレクトリの `imechen/theme` に保存 |
 | 動画コーデック | H.264 |
 
 ---
