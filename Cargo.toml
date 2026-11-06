@@ -1,5 +1,3 @@
 [workspace]
-members = ["crates/imechen-core"]
-# A separate workspace keeps gpui-pre's toolchain floor and lockfile changes away from the shipping app.
-exclude = ["crates/imechen-gpui"]
+members = ["crates/imechen-core", "crates/imechen-gpui"]
 resolver = "2"

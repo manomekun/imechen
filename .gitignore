@@ -1,6 +1,8 @@
 # Rust
 /target
-/crates/imechen-gpui/target
+# cargo-packager resolves out-dir against the crate, not the workspace root.
+/crates/imechen-gpui/packager-out
+/dist
 
 # OS
 .DS_Store
