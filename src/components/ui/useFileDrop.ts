@@ -6,8 +6,9 @@ export function useFileDrop(onFiles: (paths: string[]) => void): Accessor<boolea
   const [isDragOver, setIsDragOver] = createSignal(false);
 
   let unlisten: (() => void) | undefined;
+  let disposed = false;
   onMount(async () => {
-    unlisten = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+    const off = await getCurrentWebviewWindow().onDragDropEvent((event) => {
       if (event.payload.type === "over") {
         setIsDragOver(true);
       } else if (event.payload.type === "drop") {
@@ -18,8 +19,15 @@ export function useFileDrop(onFiles: (paths: string[]) => void): Accessor<boolea
         setIsDragOver(false);
       }
     });
+    // Navigating away before registration resolves would otherwise leak a
+    // window-level listener that keeps adding drops to an unmounted page.
+    if (disposed) off();
+    else unlisten = off;
   });
-  onCleanup(() => unlisten?.());
+  onCleanup(() => {
+    disposed = true;
+    unlisten?.();
+  });
 
   return isDragOver;
 }
