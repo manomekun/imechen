@@ -290,4 +290,75 @@ mod tests {
             leaked
         );
     }
+
+    fn write_frames(dir: &Path, count: u8) -> Vec<String> {
+        (0..count)
+            .map(|i| {
+                let p = dir.join(format!("g{}.png", i));
+                RgbaImage::from_pixel(16, 16, image::Rgba([i * 60, 100, 0, 255]))
+                    .save(&p)
+                    .unwrap();
+                p.to_string_lossy().to_string()
+            })
+            .collect()
+    }
+
+    fn request(dir: &Path, paths: Vec<String>, format: &str, fps: u32) -> CreateAnimationRequest {
+        CreateAnimationRequest {
+            image_paths: paths,
+            output_format: format.to_string(),
+            output_dir: dir.to_string_lossy().to_string(),
+            output_name: "anim".to_string(),
+            fps,
+        }
+    }
+
+    fn work_dir(tag: &str) -> (PathBuf, TempDirGuard) {
+        let dir = std::env::temp_dir().join(format!("imechen_anim_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        (dir.clone(), TempDirGuard(dir))
+    }
+
+    #[test]
+    fn gif_and_animated_webp_are_written_with_the_requested_frame_count() {
+        for (format, ext) in [("gif", "gif"), ("awebp", "webp")] {
+            let (dir, _guard) = work_dir(format);
+            let paths = write_frames(&dir, 3);
+
+            let result = create_animation(request(&dir, paths, format, 10))
+                .expect("create_animation failed");
+
+            assert_eq!(result.frame_count, 3, "{}", format);
+            assert_eq!(
+                Path::new(&result.output_path),
+                dir.join(format!("anim.{}", ext))
+            );
+            assert!(result.output_size > 0);
+            assert_eq!(
+                result.output_size,
+                std::fs::metadata(&result.output_path).unwrap().len()
+            );
+        }
+    }
+
+    #[test]
+    fn zero_fps_is_rejected() {
+        let (dir, _guard) = work_dir("fps0");
+        let paths = write_frames(&dir, 2);
+
+        let err = create_animation(request(&dir, paths, "gif", 0)).unwrap_err();
+
+        assert!(err.contains("fps"), "{}", err);
+    }
+
+    #[test]
+    fn unsupported_animation_format_is_rejected() {
+        let (dir, _guard) = work_dir("badfmt");
+        let paths = write_frames(&dir, 2);
+
+        let err = create_animation(request(&dir, paths, "apng", 10)).unwrap_err();
+
+        assert!(err.contains("Unsupported format"), "{}", err);
+    }
 }

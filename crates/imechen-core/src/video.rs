@@ -497,4 +497,65 @@ mod tests {
         assert!((0.8..=1.2).contains(&duration_secs));
         assert!(format.contains("mp4"));
     }
+
+    fn generate_clip(tag: &str, secs: u32) -> (String, TempDirGuard, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("imechen_video_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let guard = TempDirGuard(dir.clone());
+        let clip = dir.join("clip.mp4").to_string_lossy().to_string();
+
+        let iter = FfmpegCommand::new()
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=size=64x48:rate=10:duration={}", secs),
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .output(&clip)
+            .spawn()
+            .expect("ffmpeg spawn failed")
+            .iter()
+            .expect("ffmpeg iter failed");
+        for _event in iter {}
+
+        (clip, guard, dir)
+    }
+
+    #[test]
+    fn convert_video_writes_output_and_reports_progress() {
+        for format in ["webm", "mp4"] {
+            let (clip, _guard, dir) = generate_clip(format, 3);
+            let out_dir = dir.join("out");
+            std::fs::create_dir_all(&out_dir).unwrap();
+            let request = ConvertVideoRequest {
+                source_path: clip.clone(),
+                output_format: format.to_string(),
+                output_dir: out_dir.to_string_lossy().to_string(),
+                quality: None,
+                resize_width: None,
+                resize_height: None,
+            };
+            let mut progress = Vec::new();
+
+            let result = convert_video(request, |p| progress.push(p))
+                .unwrap_or_else(|e| panic!("convert_video to {} failed: {}", format, e));
+
+            assert_eq!(
+                Path::new(&result.output_path),
+                out_dir.join(format!("clip.{}", format))
+            );
+            assert!(result.output_size > 0, "{}", format);
+            assert_eq!(
+                result.original_size,
+                std::fs::metadata(&clip).unwrap().len()
+            );
+            assert!(!progress.is_empty(), "no progress reported for {}", format);
+            assert!(progress.iter().all(|p| (0.0..=100.0).contains(&p.percent)));
+        }
+    }
 }

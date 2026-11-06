@@ -257,3 +257,189 @@ pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult,
         height: img.height(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "imechen_image_test_{}_{}",
+                tag,
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_source(dir: &TempDir, name: &str, w: u32, h: u32) -> String {
+        let path = dir.path().join(name);
+        image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255])
+        })
+        .save(&path)
+        .unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn request(source: &str, dir: &TempDir, format: &str) -> ConvertImageRequest {
+        ConvertImageRequest {
+            source_path: source.to_string(),
+            output_format: format.to_string(),
+            output_dir: dir.path().join("out").to_string_lossy().to_string(),
+            quality: None,
+            resize_width: None,
+            resize_height: None,
+            keep_aspect_ratio: None,
+        }
+    }
+
+    fn convert(tag: &str, width: Option<u32>, height: Option<u32>, keep: bool) -> (u32, u32) {
+        let dir = TempDir::new(tag);
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let source = write_source(&dir, "src.png", 200, 100);
+        let mut req = request(&source, &dir, "png");
+        req.resize_width = width;
+        req.resize_height = height;
+        req.keep_aspect_ratio = Some(keep);
+
+        let result = convert_image(req).expect("convert_image failed");
+
+        let decoded = image::open(&result.output_path).unwrap();
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (result.width, result.height)
+        );
+        (result.width, result.height)
+    }
+
+    #[test]
+    fn width_and_height_with_aspect_ratio_fit_within_bounds_preserving_ratio() {
+        assert_eq!(convert("fit", Some(50), Some(50), true), (50, 25));
+    }
+
+    #[test]
+    fn width_and_height_without_aspect_ratio_stretch_to_exact_size() {
+        assert_eq!(convert("exact", Some(50), Some(50), false), (50, 50));
+    }
+
+    #[test]
+    fn width_only_with_aspect_ratio_derives_height_from_source_ratio() {
+        assert_eq!(convert("w_keep", Some(100), None, true), (100, 50));
+    }
+
+    #[test]
+    fn width_only_without_aspect_ratio_keeps_source_height() {
+        assert_eq!(convert("w_free", Some(100), None, false), (100, 100));
+    }
+
+    #[test]
+    fn height_only_with_aspect_ratio_derives_width_from_source_ratio() {
+        assert_eq!(convert("h_keep", None, Some(50), true), (100, 50));
+    }
+
+    #[test]
+    fn height_only_without_aspect_ratio_keeps_source_width() {
+        assert_eq!(convert("h_free", None, Some(50), false), (200, 50));
+    }
+
+    #[test]
+    fn no_resize_keeps_source_dimensions() {
+        assert_eq!(convert("none", None, None, true), (200, 100));
+    }
+
+    #[test]
+    fn output_is_named_after_source_stem_with_target_extension() {
+        let dir = TempDir::new("naming");
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let source = write_source(&dir, "photo.png", 16, 16);
+
+        for (format, ext) in [
+            ("jpeg", "jpg"),
+            ("jpg", "jpg"),
+            ("PNG", "png"),
+            ("webp", "webp"),
+        ] {
+            let req = request(&source, &dir, format);
+            let expected = Path::new(&req.output_dir).join(format!("photo.{}", ext));
+
+            let result = convert_image(req).expect("convert_image failed");
+
+            assert_eq!(
+                Path::new(&result.output_path),
+                expected,
+                "format {}",
+                format
+            );
+            assert!(expected.exists());
+        }
+    }
+
+    #[test]
+    fn unsupported_output_format_is_rejected() {
+        let dir = TempDir::new("unsupported");
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let source = write_source(&dir, "photo.png", 16, 16);
+
+        let err = convert_image(request(&source, &dir, "tiff")).unwrap_err();
+
+        assert!(err.contains("Unsupported format"), "{}", err);
+    }
+
+    #[test]
+    fn png_output_is_decodable_at_lossless_and_lossy_quality() {
+        for quality in [100u8, 50] {
+            let dir = TempDir::new(&format!("png_q{}", quality));
+            std::fs::create_dir_all(dir.path().join("out")).unwrap();
+            let source = write_source(&dir, "src.png", 64, 48);
+            let mut req = request(&source, &dir, "png");
+            req.quality = Some(quality);
+
+            let result = convert_image(req).expect("convert_image failed");
+
+            let decoded = image::open(&result.output_path).expect("output is not decodable");
+            assert_eq!(
+                image::ImageFormat::from_path(&result.output_path).unwrap(),
+                ImageFormat::Png
+            );
+            assert_eq!(
+                (decoded.width(), decoded.height()),
+                (64, 48),
+                "quality {}",
+                quality
+            );
+        }
+    }
+
+    #[test]
+    fn get_image_info_reports_metadata_and_a_small_png_thumbnail() {
+        let dir = TempDir::new("info");
+        let source = write_source(&dir, "wide.png", 300, 150);
+
+        let info = get_image_info(&source).expect("get_image_info failed");
+
+        assert_eq!(info.path, source);
+        assert_eq!(info.name, "wide.png");
+        assert_eq!(info.size, std::fs::metadata(&source).unwrap().len());
+        assert_eq!((info.width, info.height), (300, 150));
+        assert_eq!(info.format, "png");
+        let thumb = image::load_from_memory_with_format(&info.thumbnail_png, ImageFormat::Png)
+            .expect("thumbnail is not a PNG");
+        assert!(thumb.width() <= 72 && thumb.height() <= 72);
+    }
+}
