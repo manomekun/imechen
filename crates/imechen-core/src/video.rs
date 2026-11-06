@@ -236,11 +236,9 @@ pub fn convert_video(
                     speed: format!("{:.1}x", progress.speed),
                 });
             }
-            FfmpegEvent::Error(e) => {
-                // ffmpeg outputs warnings to stderr too, only fail on actual errors
-                if e.contains("Error") || e.contains("Invalid") {
-                    return Err(format!("ffmpeg error: {}", e));
-                }
+            // ffmpeg outputs warnings to stderr too, only fail on actual errors
+            FfmpegEvent::Error(e) if e.contains("Error") || e.contains("Invalid") => {
+                return Err(format!("ffmpeg error: {}", e));
             }
             _ => {}
         }
