@@ -1,7 +1,7 @@
 [package]
 name = "imechen-gpui"
 version = "0.2.3"
-description = "GPUI frontend prototype for imechen"
+description = "GPUI frontend for imechen"
 authors = ["manomekun"]
 edition = "2021"
 publish = false
@@ -14,8 +14,10 @@ path = "src/main.rs"
 
 [dependencies]
 imechen-core = { path = "../imechen-core" }
-# Pinned to the snapshot gpui-kit builds against so it can be added later without conflicts.
+# Must stay on the snapshot gpui-kit builds against, or two gpui copies end up in the tree.
 gpui = { package = "gpui-pre", version = "=0.3.11" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-# gpui already depends on futures; the progress channel needs it directly.
-futures = "0.3"
+# Exact pin: every gpui-kit snapshot changes the API, and 0.9.0 is built against our gpui-pre.
+gpui-kit = "=0.9.0"
+# Already in the lockfile via imechen-core; saves hand-rolling per-OS config dirs.
+dirs = "5"
