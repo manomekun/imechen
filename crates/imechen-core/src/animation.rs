@@ -116,8 +116,6 @@ fn create_mp4_from_frames(
     output_path: &Path,
     fps: u32,
 ) -> Result<(), String> {
-    use ffmpeg_sidecar::command::FfmpegCommand;
-
     if image_paths.is_empty() {
         return Err("No images provided".to_string());
     }
@@ -148,8 +146,8 @@ fn create_mp4_from_frames(
 
     let pattern = tmp_dir.join(format!("frame_%06d.{}", ext));
 
-    let iter = FfmpegCommand::new()
-        .args([
+    crate::video::run_ffmpeg(
+        [
             "-y",
             "-framerate",
             &fps.to_string(),
@@ -162,21 +160,9 @@ fn create_mp4_from_frames(
             "-crf",
             "18",
             &output_path.to_string_lossy(),
-        ])
-        .spawn()
-        .map_err(|e| format!("ffmpeg spawn failed: {}", e))?
-        .iter()
-        .map_err(|e| format!("ffmpeg iter failed: {}", e))?;
-
-    for event in iter {
-        if let ffmpeg_sidecar::event::FfmpegEvent::Error(e) = event {
-            if e.contains("Error") || e.contains("Invalid") {
-                return Err(format!("ffmpeg error: {}", e));
-            }
-        }
-    }
-
-    Ok(())
+        ],
+        |_| {},
+    )
 }
 
 pub fn create_animation(request: CreateAnimationRequest) -> Result<CreateAnimationResult, String> {

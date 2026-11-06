@@ -1,6 +1,6 @@
 use crate::output::OutputReservation;
 use ffmpeg_sidecar::command::FfmpegCommand;
-use ffmpeg_sidecar::event::FfmpegEvent;
+use ffmpeg_sidecar::event::{FfmpegEvent, FfmpegProgress, LogLevel};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -76,6 +76,15 @@ fn get_video_codec_for_format(format: &str) -> &str {
     }
 }
 
+/// The WebM muxer accepts only Vorbis or Opus audio, so AAC there makes ffmpeg
+/// fail on any source that has an audio track.
+fn get_audio_codec_for_format(format: &str) -> &str {
+    match format.to_lowercase().as_str() {
+        "webm" => "libopus",
+        _ => "aac",
+    }
+}
+
 /// Read input metadata from ffmpeg's own stderr instead of ffprobe:
 /// the macOS sidecar download ships only the ffmpeg binary, so ffprobe
 /// cannot be assumed to exist next to it.
@@ -118,6 +127,51 @@ fn probe_video(path: &str) -> Result<(u32, u32, f64, String, String), String> {
         format.unwrap_or_else(|| "unknown".to_string()),
         codec,
     ))
+}
+
+/// Fails on ffmpeg's exit status rather than on its log lines: a muxer that
+/// rejects a codec logs the reason at error level and still leaves a
+/// header-only file behind, which looks like a small but valid output.
+pub(crate) fn run_ffmpeg<I, S>(
+    args: I,
+    mut on_progress: impl FnMut(&FfmpegProgress),
+) -> Result<(), String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut child = FfmpegCommand::new()
+        .args(args)
+        .spawn()
+        .map_err(|e| format!("ffmpeg spawn failed: {}", e))?;
+
+    // The first error line names the cause; later ones are its fallout.
+    let mut first_error: Option<String> = None;
+    for event in child
+        .iter()
+        .map_err(|e| format!("ffmpeg iter failed: {}", e))?
+    {
+        match event {
+            FfmpegEvent::Progress(progress) => on_progress(&progress),
+            FfmpegEvent::Log(LogLevel::Error | LogLevel::Fatal, line)
+            | FfmpegEvent::Error(line) => {
+                first_error.get_or_insert(line);
+            }
+            _ => {}
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("ffmpeg wait failed: {}", e))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg error: {}",
+            first_error.unwrap_or_else(|| status.to_string())
+        ))
+    }
 }
 
 /// `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/path/a.mp4':` -> `mov,mp4,m4a,3gp,3g2,mj2`
@@ -210,39 +264,25 @@ pub fn convert_video(
         args.extend(["-vf".to_string(), vf]);
     }
 
-    // Audio copy
-    args.extend(["-c:a".to_string(), "aac".to_string()]);
+    args.extend([
+        "-c:a".to_string(),
+        get_audio_codec_for_format(&request.output_format).to_string(),
+    ]);
     args.push(output_path_str.clone());
 
-    let iter = FfmpegCommand::new()
-        .args(args)
-        .spawn()
-        .map_err(|e| format!("ffmpeg spawn failed: {}", e))?
-        .iter()
-        .map_err(|e| format!("ffmpeg iter failed: {}", e))?;
-
-    for event in iter {
-        match event {
-            FfmpegEvent::Progress(progress) => {
-                let percent = if duration_secs > 0.0 {
-                    let time_secs = parse_ffmpeg_time(&progress.time);
-                    ((time_secs / duration_secs) * 100.0).min(100.0)
-                } else {
-                    0.0
-                };
-                on_progress(VideoProgress {
-                    percent,
-                    fps: progress.fps,
-                    speed: format!("{:.1}x", progress.speed),
-                });
-            }
-            // ffmpeg outputs warnings to stderr too, only fail on actual errors
-            FfmpegEvent::Error(e) if e.contains("Error") || e.contains("Invalid") => {
-                return Err(format!("ffmpeg error: {}", e));
-            }
-            _ => {}
-        }
-    }
+    run_ffmpeg(args, |progress| {
+        let percent = if duration_secs > 0.0 {
+            let time_secs = parse_ffmpeg_time(&progress.time);
+            ((time_secs / duration_secs) * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        on_progress(VideoProgress {
+            percent,
+            fps: progress.fps,
+            speed: format!("{:.1}x", progress.speed),
+        });
+    })?;
 
     let output_size = std::fs::metadata(&output_path)
         .map_err(|e| e.to_string())?
@@ -513,6 +553,8 @@ mod tests {
         let guard = TempDirGuard(dir.clone());
         let clip = dir.join("clip.mp4").to_string_lossy().to_string();
 
+        // The audio track matters: some containers reject the default audio
+        // codec, which a silent clip would never exercise.
         let iter = FfmpegCommand::new()
             .args([
                 "-y",
@@ -520,8 +562,14 @@ mod tests {
                 "lavfi",
                 "-i",
                 &format!("testsrc=size=64x48:rate=10:duration={}", secs),
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("sine=frequency=440:duration={}", secs),
                 "-pix_fmt",
                 "yuv420p",
+                "-c:a",
+                "aac",
             ])
             .output(&clip)
             .spawn()

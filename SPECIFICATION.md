@@ -64,7 +64,8 @@
 - 入力: ffmpeg で読み込める動画（MP4, MOV, AVI, WebM, FLV, HEVC など）
 - 出力形式: MP4（既定）/ MOV / AVI / WebM / FLV
   - 映像コーデックは H.264（libx264）。WebM のみ VP9（libvpx-vp9）
-  - 音声は AAC にエンコードする
+  - 音声は AAC にエンコードする。WebM のみ Opus（libopus。WebM は AAC を格納できないため）
+  - ffmpeg が異常終了した場合は失敗として扱い、ffmpeg が出した最初のエラーを表示する
 - 一覧の列: ファイル名・解像度・長さ・ファイルサイズ
 - 成功したファイルは一覧から外し、失敗したファイルは一覧に残す
 - 進捗はファイルごとに 0〜100% で表示する
@@ -114,7 +115,7 @@
 | 画像処理 | `image`、`imagequant` + `oxipng`（PNG）、`webp` |
 | メディア処理 | `ffmpeg-sidecar`（ffmpeg 実行ファイルを固定 URL + SHA-256 検証で取得） |
 | 永続化 | テーマ設定を設定ディレクトリの `imechen/theme` に保存 |
-| 動画コーデック | H.264（WebM のみ VP9）、音声 AAC |
+| 動画コーデック | H.264（WebM のみ VP9）、音声 AAC（WebM のみ Opus） |
 | 配布 | `cargo-packager`（macOS dmg / Windows NSIS / Linux deb・AppImage） |
 
 ---
