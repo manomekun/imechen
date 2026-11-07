@@ -10,7 +10,9 @@ mod settings;
 mod sidebar;
 mod theme;
 
-use gpui::{px, size, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
+use gpui::{
+    px, size, AppContext as _, Bounds, QuitMode, TitlebarOptions, WindowBounds, WindowOptions,
+};
 use gpui_kit::assets::{icon_assets, Assets};
 
 // The default bundle lacks these icons, and `Assets` errors instead of
@@ -35,6 +37,9 @@ impl gpui::AssetSource for AppAssets {
 fn main() {
     gpui_kit::application().with_assets(AppAssets).run(|cx| {
         gpui_kit::init(cx);
+        // GPUI keeps a macOS app alive with no window by default, and imechen has no
+        // way to reopen one, so the app would linger until quit from the Dock.
+        cx.set_quit_mode(QuitMode::LastWindowClosed);
 
         let mode = settings::load_theme_mode();
         cx.set_global(settings::ActiveThemeMode(mode));
