@@ -49,7 +49,7 @@ impl CancelToken {
         // Killing under the slot lock is safe: detach() takes the same lock
         // before wait() locks the child, so the child is never locked here.
         if let Some(child) = lock(&self.0.child).as_ref() {
-            let _ = lock(child).kill();
+            kill(&mut lock(child));
         }
     }
 
@@ -61,7 +61,7 @@ impl CancelToken {
         let mut slot = lock(&self.0.child);
         *slot = Some(child.clone());
         if self.is_cancelled() {
-            let _ = lock(&child).kill();
+            kill(&mut lock(&child));
         }
     }
 
@@ -70,6 +70,26 @@ impl CancelToken {
     pub(crate) fn detach(&self) {
         *lock(&self.0.child) = None;
     }
+}
+
+/// A package-manager shim (Chocolatey, Scoop) runs the real ffmpeg as its own
+/// child, and killing only the shim leaves that child encoding, so Windows
+/// kills the whole process tree.
+fn kill(child: &mut FfmpegChild) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A GUI app would otherwise flash a console window for taskkill.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let pid = child.as_inner().id().to_string();
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
 }
 
 /// Cancels every live token, for app shutdown where the page that owns a token
