@@ -41,6 +41,21 @@ fn main() {
         // way to reopen one, so the app would linger until quit from the Dock.
         cx.set_quit_mode(QuitMode::LastWindowClosed);
 
+        // GPUI gives quit handlers 200 ms, and ffmpeg is a separate process that
+        // would otherwise outlive the app. An in-process image/GIF/WebP encode that
+        // does not reach a checkpoint within that window may still leave its
+        // reserved file.
+        cx.on_app_quit(|cx| {
+            imechen_core::cancel::cancel_all();
+            let executor = cx.background_executor().clone();
+            async move {
+                while imechen_core::cancel::active_jobs() > 0 {
+                    executor.timer(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        })
+        .detach();
+
         let mode = settings::load_theme_mode();
         cx.set_global(settings::ActiveThemeMode(mode));
         theme::apply(mode, cx.window_appearance(), cx);

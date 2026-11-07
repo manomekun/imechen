@@ -1,6 +1,6 @@
 [package]
 name = "imechen-core"
-version = "1.0.1"
+version = "1.0.2"
 description = "Conversion logic shared by imechen frontends"
 authors = ["manomekun"]
 edition = "2021"

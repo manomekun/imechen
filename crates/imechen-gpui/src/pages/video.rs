@@ -10,6 +10,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::SelectEvent;
 use gpui_kit::component::slider::{SliderEvent, SliderState};
+use imechen_core::cancel::{CancelToken, Outcome};
 use imechen_core::video::{self as core_video, ConvertVideoRequest};
 
 use super::Page;
@@ -146,6 +147,17 @@ enum Ffmpeg {
     Failed(SharedString),
 }
 
+/// The batch status only reports a finished run once progress is non-zero,
+/// which a batch of failures never reaches; a cancelled run must not claim
+/// completion, so it resets to the idle status.
+fn end_progress(cancelled: bool) -> u32 {
+    if cancelled {
+        0
+    } else {
+        100
+    }
+}
+
 fn cta_disabled(file_count: usize, converting: bool, ffmpeg: &Ffmpeg) -> bool {
     file_count == 0 || converting || *ffmpeg != Ffmpeg::Ready
 }
@@ -190,6 +202,8 @@ pub struct VideoPage {
     /// Probing needs ffmpeg, so paths added while it is being prepared wait here.
     pending: Vec<PathBuf>,
     converting: bool,
+    cancelling: bool,
+    cancel: Option<CancelToken>,
     progress: u32,
     results: Vec<Converted>,
     errors: Vec<ConvertError>,
@@ -242,6 +256,8 @@ impl VideoPage {
             ffmpeg: Ffmpeg::Preparing,
             pending: Vec::new(),
             converting: false,
+            cancelling: false,
+            cancel: None,
             progress: 0,
             results: Vec::new(),
             errors: Vec::new(),
@@ -437,7 +453,10 @@ impl VideoPage {
         };
 
         self.notice = None;
+        let cancel = CancelToken::new();
+        self.cancel = Some(cancel.clone());
         self.converting = true;
+        self.cancelling = false;
         self.progress = 0;
         self.results.clear();
         self.errors.clear();
@@ -453,7 +472,12 @@ impl VideoPage {
         let quality = self.quality.read(cx).value().end().round() as u8;
 
         cx.spawn(async move |this, cx| {
+            let mut cancelled = false;
             for (path, name) in jobs {
+                if cancel.is_cancelled() {
+                    cancelled = true;
+                    break;
+                }
                 let started = this.update(cx, |this, cx| {
                     this.progress = 0;
                     cx.notify();
@@ -473,8 +497,9 @@ impl VideoPage {
                 // core reports progress from inside its blocking ffmpeg
                 // loop; the channel carries it to this foreground task.
                 let (tx, mut rx) = mpsc::unbounded::<f64>();
+                let job_cancel = cancel.clone();
                 let task = cx.background_spawn(async move {
-                    core_video::convert_video(request, move |progress| {
+                    core_video::convert_video(request, &job_cancel, move |progress| {
                         tx.unbounded_send(progress.percent).ok();
                     })
                 });
@@ -488,10 +513,15 @@ impl VideoPage {
                     }
                 }
                 let outcome = task.await;
+                if matches!(outcome, Ok(Outcome::Cancelled)) {
+                    cancelled = true;
+                    break;
+                }
 
                 let updated = this.update(cx, |this, cx| {
                     match outcome {
-                        Ok(result) => {
+                        Ok(Outcome::Cancelled) => {}
+                        Ok(Outcome::Done(result)) => {
                             let output = PathBuf::from(&result.output_path);
                             this.results.push(Converted {
                                 name: file_name(&output),
@@ -520,15 +550,24 @@ impl VideoPage {
                 }
             }
             this.update(cx, |this, cx| {
-                // The batch status only reports a finished run once progress
-                // is non-zero, which a batch of failures never reaches.
-                this.progress = 100;
+                this.progress = end_progress(cancelled);
                 this.converting = false;
+                this.cancelling = false;
+                this.cancel = None;
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        let Some(token) = &self.cancel else {
+            return;
+        };
+        token.cancel();
+        self.cancelling = true;
+        cx.notify();
     }
 
     fn rows(&self) -> Vec<FileRow> {
@@ -731,8 +770,16 @@ impl Render for VideoPage {
                     .child(table)
                     .child(ResultList::new(outputs, errors, t)),
             )
-            .when(self.converting, |this| {
-                this.child(PixelLoader::new("動画変換中...").progress(self.progress))
+            .when(self.converting, |root| {
+                root.child(
+                    PixelLoader::new("動画変換中...")
+                        .progress(self.progress)
+                        .cancelling(self.cancelling)
+                        .on_cancel({
+                            let this = this.clone();
+                            move |_, cx| this.update(cx, |this, cx| this.cancel(cx))
+                        }),
+                )
             })
     }
 }
@@ -865,6 +912,12 @@ mod tests {
     fn picking_a_preset_without_files_fills_nothing() {
         assert_eq!(preset_change_fill(Preset::Height(720), None), None);
         assert_eq!(preset_change_fill(Preset::Original, None), None);
+    }
+
+    #[test]
+    fn finished_batch_reports_full_progress_and_cancelled_batch_resets_it() {
+        assert_eq!(end_progress(false), 100);
+        assert_eq!(end_progress(true), 0);
     }
 
     #[test]

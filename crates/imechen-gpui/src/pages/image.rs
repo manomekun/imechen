@@ -10,6 +10,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::SelectEvent;
 use gpui_kit::component::slider::{SliderEvent, SliderState};
+use imechen_core::cancel::{CancelToken, Outcome};
 use imechen_core::image::{self as core_image, ConvertImageRequest};
 
 use super::Page;
@@ -104,6 +105,8 @@ pub struct ImagePage {
     keep_aspect: bool,
     output_dir: PathBuf,
     converting: bool,
+    cancelling: bool,
+    cancel: Option<CancelToken>,
     progress: u32,
     results: Vec<Converted>,
     errors: Vec<ConvertError>,
@@ -143,6 +146,8 @@ impl ImagePage {
             keep_aspect: true,
             output_dir: default_output_dir(),
             converting: false,
+            cancelling: false,
+            cancel: None,
             progress: 0,
             results: Vec::new(),
             errors: Vec::new(),
@@ -264,7 +269,10 @@ impl ImagePage {
             };
 
         self.notice = None;
+        let cancel = CancelToken::new();
+        self.cancel = Some(cancel.clone());
         self.converting = true;
+        self.cancelling = false;
         self.progress = 0;
         self.results.clear();
         self.errors.clear();
@@ -282,7 +290,12 @@ impl ImagePage {
 
         cx.spawn(async move |this, cx| {
             let total = jobs.len();
+            let mut cancelled = false;
             for (i, (path, name)) in jobs.into_iter().enumerate() {
+                if cancel.is_cancelled() {
+                    cancelled = true;
+                    break;
+                }
                 let request = ConvertImageRequest {
                     source_path: path.to_string_lossy().into_owned(),
                     output_format: format.request_name().to_string(),
@@ -292,12 +305,20 @@ impl ImagePage {
                     resize_height,
                     keep_aspect_ratio: Some(keep_aspect),
                 };
+                let job_cancel = cancel.clone();
                 let outcome = cx
-                    .background_spawn(async move { core_image::convert_image(request) })
+                    .background_spawn(
+                        async move { core_image::convert_image(request, &job_cancel) },
+                    )
                     .await;
+                if matches!(outcome, Ok(Outcome::Cancelled)) {
+                    cancelled = true;
+                    break;
+                }
                 let updated = this.update(cx, |this, cx| {
                     match outcome {
-                        Ok(result) => {
+                        Ok(Outcome::Cancelled) => {}
+                        Ok(Outcome::Done(result)) => {
                             let output = PathBuf::from(&result.output_path);
                             this.results.push(Converted {
                                 name: file_name(&output),
@@ -327,12 +348,28 @@ impl ImagePage {
                 }
             }
             this.update(cx, |this, cx| {
+                if cancelled {
+                    // A cancelled run must not leave a partial percentage that
+                    // the footer would report as a finished batch.
+                    this.progress = 0;
+                }
                 this.converting = false;
+                this.cancelling = false;
+                this.cancel = None;
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        let Some(token) = &self.cancel else {
+            return;
+        };
+        token.cancel();
+        self.cancelling = true;
+        cx.notify();
     }
 
     fn rows(&self) -> Vec<FileRow> {
@@ -515,8 +552,16 @@ impl Render for ImagePage {
                     .child(table)
                     .child(ResultList::new(outputs, errors, t)),
             )
-            .when(self.converting, |this| {
-                this.child(PixelLoader::new("変換中...").progress(self.progress))
+            .when(self.converting, |root| {
+                root.child(
+                    PixelLoader::new("変換中...")
+                        .progress(self.progress)
+                        .cancelling(self.cancelling)
+                        .on_cancel({
+                            let this = this.clone();
+                            move |_, cx| this.update(cx, |this, cx| this.cancel(cx))
+                        }),
+                )
             })
     }
 }

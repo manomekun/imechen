@@ -1,3 +1,4 @@
+use crate::cancel::{CancelToken, JobGuard, Outcome};
 use crate::output::OutputReservation;
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
@@ -180,10 +181,21 @@ fn compress_webp(
     Ok(())
 }
 
-pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult, String> {
+pub fn convert_image(
+    request: ConvertImageRequest,
+    cancel: &CancelToken,
+) -> Result<Outcome<ConvertImageResult>, String> {
+    // Declared first so it drops last, after the reservation removed any partial file.
+    let _job = JobGuard::new();
+    if cancel.is_cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
     let source = Path::new(&request.source_path);
     let original_size = std::fs::metadata(source).map_err(|e| e.to_string())?.len();
     let mut img = image::open(source).map_err(|e| e.to_string())?;
+    if cancel.is_cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
 
     // Resize if requested.
     // Cases:
@@ -219,6 +231,10 @@ pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult,
         }
         (None, None) => img,
     };
+
+    if cancel.is_cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
 
     let target_format = parse_format(&request.output_format)?;
     let ext = format_extension(target_format);
@@ -256,13 +272,13 @@ pub fn convert_image(request: ConvertImageRequest) -> Result<ConvertImageResult,
         .len();
     let output_path = reservation.commit();
 
-    Ok(ConvertImageResult {
+    Ok(Outcome::Done(ConvertImageResult {
         output_path: output_path.to_string_lossy().to_string(),
         original_size,
         output_size,
         width: img.width(),
         height: img.height(),
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -305,6 +321,13 @@ mod tests {
         path.to_string_lossy().to_string()
     }
 
+    fn convert_done(req: ConvertImageRequest) -> Result<ConvertImageResult, String> {
+        match convert_image(req, &CancelToken::new())? {
+            Outcome::Done(v) => Ok(v),
+            Outcome::Cancelled => Err("unexpectedly cancelled".to_string()),
+        }
+    }
+
     fn request(source: &str, dir: &TempDir, format: &str) -> ConvertImageRequest {
         ConvertImageRequest {
             source_path: source.to_string(),
@@ -326,7 +349,7 @@ mod tests {
         req.resize_height = height;
         req.keep_aspect_ratio = Some(keep);
 
-        let result = convert_image(req).expect("convert_image failed");
+        let result = convert_done(req).expect("convert_image failed");
 
         let decoded = image::open(&result.output_path).unwrap();
         assert_eq!(
@@ -392,7 +415,7 @@ mod tests {
             std::fs::create_dir_all(&req.output_dir).unwrap();
             let expected = Path::new(&req.output_dir).join(format!("photo.{}", ext));
 
-            let result = convert_image(req).expect("convert_image failed");
+            let result = convert_done(req).expect("convert_image failed");
 
             assert_eq!(
                 Path::new(&result.output_path),
@@ -410,7 +433,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("out")).unwrap();
         let source = write_source(&dir, "photo.png", 16, 16);
 
-        let err = convert_image(request(&source, &dir, "tiff")).unwrap_err();
+        let err = convert_done(request(&source, &dir, "tiff")).unwrap_err();
 
         assert!(err.contains("Unsupported format"), "{}", err);
     }
@@ -424,7 +447,7 @@ mod tests {
             let mut req = request(&source, &dir, "png");
             req.quality = Some(quality);
 
-            let result = convert_image(req).expect("convert_image failed");
+            let result = convert_done(req).expect("convert_image failed");
 
             let decoded = image::open(&result.output_path).expect("output is not decodable");
             assert_eq!(
@@ -469,8 +492,8 @@ mod tests {
         let source = write_source(&dir, "photo.png", 16, 16);
         std::fs::write(dir.path().join("photo.webp"), b"keep me").unwrap();
 
-        let first = convert_image(same_dir_request(&source, &dir, "webp")).unwrap();
-        let second = convert_image(same_dir_request(&source, &dir, "webp")).unwrap();
+        let first = convert_done(same_dir_request(&source, &dir, "webp")).unwrap();
+        let second = convert_done(same_dir_request(&source, &dir, "webp")).unwrap();
 
         assert_eq!(
             Path::new(&first.output_path),
@@ -496,8 +519,8 @@ mod tests {
         let png = write_source(&dir, "a.png", 24, 24);
         std::fs::create_dir_all(dir.path().join("out")).unwrap();
 
-        let first = convert_image(request(&jpg, &dir, "webp")).unwrap();
-        let second = convert_image(request(&png, &dir, "webp")).unwrap();
+        let first = convert_done(request(&jpg, &dir, "webp")).unwrap();
+        let second = convert_done(request(&png, &dir, "webp")).unwrap();
 
         let out = dir.path().join("out");
         assert_eq!(Path::new(&first.output_path), out.join("a.webp"));
@@ -512,7 +535,7 @@ mod tests {
         let source = write_source(&dir, "photo.png", 32, 32);
         let before = std::fs::read(&source).unwrap();
 
-        let result = convert_image(same_dir_request(&source, &dir, "png")).unwrap();
+        let result = convert_done(same_dir_request(&source, &dir, "png")).unwrap();
 
         assert_eq!(
             Path::new(&result.output_path),
@@ -528,7 +551,7 @@ mod tests {
         let source = write_source(&dir, "my.photo.png", 16, 16);
         std::fs::write(dir.path().join("my.photo.webp"), b"x").unwrap();
 
-        let result = convert_image(same_dir_request(&source, &dir, "webp")).unwrap();
+        let result = convert_done(same_dir_request(&source, &dir, "webp")).unwrap();
 
         assert_eq!(
             Path::new(&result.output_path),
@@ -547,9 +570,26 @@ mod tests {
         req.resize_width = Some(70_000);
         req.keep_aspect_ratio = Some(false);
 
-        let result = convert_image(req);
+        let result = convert_done(req);
 
         assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("out")).unwrap().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn pre_cancelled_image_conversion_is_cancelled_and_writes_nothing() {
+        let dir = TempDir::new("precancel");
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let source = write_source(&dir, "photo.png", 16, 16);
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let outcome = convert_image(request(&source, &dir, "png"), &cancel);
+
+        assert!(matches!(outcome, Ok(Outcome::Cancelled)));
         assert_eq!(
             std::fs::read_dir(dir.path().join("out")).unwrap().count(),
             0

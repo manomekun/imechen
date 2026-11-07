@@ -1,8 +1,10 @@
+use crate::cancel::{CancelToken, JobGuard, Outcome};
 use crate::output::OutputReservation;
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, FfmpegProgress, LogLevel};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Deserialize)]
 pub struct ConvertVideoRequest {
@@ -134,8 +136,9 @@ fn probe_video(path: &str) -> Result<(u32, u32, f64, String, String), String> {
 /// header-only file behind, which looks like a small but valid output.
 pub(crate) fn run_ffmpeg<I, S>(
     args: I,
+    cancel: &CancelToken,
     mut on_progress: impl FnMut(&FfmpegProgress),
-) -> Result<(), String>
+) -> Result<Outcome<()>, String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
@@ -144,13 +147,24 @@ where
         .args(args)
         .spawn()
         .map_err(|e| format!("ffmpeg spawn failed: {}", e))?;
+    let events = match child.iter() {
+        Ok(events) => events,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("ffmpeg iter failed: {}", e));
+        }
+    };
+    let child = Arc::new(Mutex::new(child));
+    // Attaching makes CancelToken::cancel() kill ffmpeg directly (a graceful
+    // quit would finalize a file that is discarded anyway); it also kills
+    // right away if cancel already ran.
+    cancel.attach(child.clone());
 
     // The first error line names the cause; later ones are its fallout.
+    // Killing closes ffmpeg's stderr, which ends this loop by itself.
     let mut first_error: Option<String> = None;
-    for event in child
-        .iter()
-        .map_err(|e| format!("ffmpeg iter failed: {}", e))?
-    {
+    for event in events {
         match event {
             FfmpegEvent::Progress(progress) => on_progress(&progress),
             FfmpegEvent::Log(LogLevel::Error | LogLevel::Fatal, line)
@@ -161,11 +175,21 @@ where
         }
     }
 
+    // wait() holds the child lock until ffmpeg exits; detaching first keeps a
+    // concurrent cancel() from blocking on that lock.
+    cancel.detach();
+    // Also required after kill: on Windows the output file stays locked until
+    // the process has exited, and OutputReservation::drop ignores the remove
+    // error, so returning early would leave the partial file behind.
     let status = child
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .wait()
         .map_err(|e| format!("ffmpeg wait failed: {}", e))?;
-    if status.success() {
-        Ok(())
+    if cancel.is_cancelled() {
+        Ok(Outcome::Cancelled)
+    } else if status.success() {
+        Ok(Outcome::Done(()))
     } else {
         Err(format!(
             "ffmpeg error: {}",
@@ -208,8 +232,14 @@ pub fn get_video_info(path: &str) -> Result<VideoInfo, String> {
 
 pub fn convert_video(
     request: ConvertVideoRequest,
+    cancel: &CancelToken,
     mut on_progress: impl FnMut(VideoProgress),
-) -> Result<ConvertVideoResult, String> {
+) -> Result<Outcome<ConvertVideoResult>, String> {
+    // Declared first so it drops last, after the reservation removed any partial file.
+    let _job = JobGuard::new();
+    if cancel.is_cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
     let source = request.source_path.clone();
     let original_size = std::fs::metadata(&source).map_err(|e| e.to_string())?.len();
 
@@ -270,7 +300,7 @@ pub fn convert_video(
     ]);
     args.push(output_path_str.clone());
 
-    run_ffmpeg(args, |progress| {
+    let finished = run_ffmpeg(args, cancel, |progress| {
         let percent = if duration_secs > 0.0 {
             let time_secs = parse_ffmpeg_time(&progress.time);
             ((time_secs / duration_secs) * 100.0).min(100.0)
@@ -283,6 +313,9 @@ pub fn convert_video(
             speed: format!("{:.1}x", progress.speed),
         });
     })?;
+    if finished == Outcome::Cancelled {
+        return Ok(Outcome::Cancelled);
+    }
 
     let output_size = std::fs::metadata(&output_path)
         .map_err(|e| e.to_string())?
@@ -294,11 +327,11 @@ pub fn convert_video(
     }
     reservation.commit();
 
-    Ok(ConvertVideoResult {
+    Ok(Outcome::Done(ConvertVideoResult {
         output_path: output_path_str,
         original_size,
         output_size,
-    })
+    }))
 }
 
 /// ffmpeg-sidecar's `auto_download` fetches floating "latest" URLs from
@@ -581,6 +614,13 @@ mod tests {
         (clip, guard, dir)
     }
 
+    fn done<T>(result: Result<Outcome<T>, String>) -> Result<T, String> {
+        match result? {
+            Outcome::Done(v) => Ok(v),
+            Outcome::Cancelled => Err("unexpectedly cancelled".to_string()),
+        }
+    }
+
     #[test]
     fn convert_video_writes_output_and_reports_progress() {
         for format in ["webm", "mp4"] {
@@ -597,8 +637,10 @@ mod tests {
             };
             let mut progress = Vec::new();
 
-            let result = convert_video(request, |p| progress.push(p))
-                .unwrap_or_else(|e| panic!("convert_video to {} failed: {}", format, e));
+            let result = done(convert_video(request, &CancelToken::new(), |p| {
+                progress.push(p)
+            }))
+            .unwrap_or_else(|e| panic!("convert_video to {} failed: {}", format, e));
 
             assert_eq!(
                 Path::new(&result.output_path),
@@ -627,7 +669,8 @@ mod tests {
             resize_height: None,
         };
 
-        let result = convert_video(request, |_| {}).expect("convert_video failed");
+        let result = done(convert_video(request, &CancelToken::new(), |_| {}))
+            .expect("convert_video failed");
 
         assert_eq!(Path::new(&result.output_path), dir.join("clip(1).mp4"));
         assert_eq!(std::fs::read(&clip).unwrap(), before);
@@ -649,8 +692,80 @@ mod tests {
             resize_height: Some(100_000),
         };
 
-        assert!(convert_video(request, |_| {}).is_err());
+        assert!(convert_video(request, &CancelToken::new(), |_| {}).is_err());
 
+        assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 0);
+    }
+
+    fn mp4_request(clip: &str, out_dir: &Path) -> ConvertVideoRequest {
+        ConvertVideoRequest {
+            source_path: clip.to_string(),
+            output_format: "mp4".to_string(),
+            output_dir: out_dir.to_string_lossy().to_string(),
+            quality: Some(100),
+            resize_width: None,
+            resize_height: None,
+        }
+    }
+
+    #[test]
+    fn pre_cancelled_video_conversion_is_cancelled_and_writes_nothing() {
+        let (clip, _guard, dir) = generate_clip("precancel", 1);
+        let out_dir = dir.join("out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let outcome = convert_video(mp4_request(&clip, &out_dir), &cancel, |_| {});
+
+        assert!(matches!(outcome, Ok(Outcome::Cancelled)));
+        assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn video_conversion_cancelled_mid_run_stops_early_and_leaves_no_output() {
+        let (clip, _guard, dir) = generate_clip("midcancel", 30);
+        let out_dir = dir.join("out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        // Upscaling keeps the encode busy long enough to tell a stop from a finish.
+        let big = |dir: &Path| {
+            let mut request = mp4_request(&clip, dir);
+            request.resize_width = Some(3840);
+            request.resize_height = Some(2160);
+            request
+        };
+        let full_dir = dir.join("full");
+        std::fs::create_dir_all(&full_dir).unwrap();
+        let started = std::time::Instant::now();
+        let full = convert_video(big(&full_dir), &CancelToken::new(), |_| {});
+        let full_elapsed = started.elapsed();
+        assert!(matches!(full, Ok(Outcome::Done(_))));
+
+        let cancel = CancelToken::new();
+        let trigger = cancel.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            trigger.cancel();
+        });
+        let started = std::time::Instant::now();
+
+        let outcome = convert_video(big(&out_dir), &cancel, |_| {
+            assert!(crate::cancel::active_jobs() >= 1);
+        });
+        let elapsed = started.elapsed();
+        canceller.join().unwrap();
+        eprintln!(
+            "full encode {:?}, cancelled run {:?}",
+            full_elapsed, elapsed
+        );
+
+        assert!(matches!(outcome, Ok(Outcome::Cancelled)));
+        assert!(
+            elapsed < full_elapsed / 2,
+            "{:?} vs {:?}",
+            elapsed,
+            full_elapsed
+        );
         assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 0);
     }
 }

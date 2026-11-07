@@ -1,6 +1,6 @@
 [package]
 name = "imechen-gpui"
-version = "1.0.1"
+version = "1.0.2"
 description = "GPUI frontend for imechen"
 authors = ["manomekun"]
 edition = "2021"
