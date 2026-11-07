@@ -12,6 +12,7 @@ use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::SelectEvent;
 use gpui_kit::component::{Icon, Sizable as _};
 use imechen_core::animation::{create_animation, CreateAnimationRequest};
+use imechen_core::cancel::{CancelToken, Outcome};
 use imechen_core::image as core_image;
 
 use super::Page;
@@ -169,6 +170,8 @@ pub struct AnimationPage {
     fps: Entity<InputState>,
     output_dir: PathBuf,
     creating: bool,
+    cancelling: bool,
+    cancel: Option<CancelToken>,
     result: Option<Created>,
     errors: Vec<ConvertError>,
     notice: Option<SharedString>,
@@ -207,6 +210,8 @@ impl AnimationPage {
             fps,
             output_dir: default_output_dir(),
             creating: false,
+            cancelling: false,
+            cancel: None,
             result: None,
             errors: Vec::new(),
             notice: None,
@@ -341,7 +346,10 @@ impl AnimationPage {
         let target = output_dir.join(format!("{name}.{}", format.extension()));
 
         self.notice = None;
+        let cancel = CancelToken::new();
+        self.cancel = Some(cancel.clone());
         self.creating = true;
+        self.cancelling = false;
         self.result = None;
         self.errors.clear();
         cx.notify();
@@ -360,12 +368,15 @@ impl AnimationPage {
 
         cx.spawn(async move |this, cx| {
             let outcome = cx
-                .background_spawn(async move { create_animation(request) })
+                .background_spawn(async move { create_animation(request, &cancel) })
                 .await;
             this.update(cx, |this, cx| {
                 this.creating = false;
+                this.cancelling = false;
+                this.cancel = None;
                 match outcome {
-                    Ok(result) => {
+                    Ok(Outcome::Cancelled) => {}
+                    Ok(Outcome::Done(result)) => {
                         let output = PathBuf::from(&result.output_path);
                         this.result = Some(Created {
                             name: file_name(&output),
@@ -391,6 +402,15 @@ impl AnimationPage {
             .ok();
         })
         .detach();
+    }
+
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        let Some(token) = &self.cancel else {
+            return;
+        };
+        token.cancel();
+        self.cancelling = true;
+        cx.notify();
     }
 
     fn rows(&self, t: Tokens, this: &Entity<Self>) -> Vec<FileRow> {
@@ -620,8 +640,15 @@ impl Render for AnimationPage {
                     .child(table)
                     .child(ResultList::new(outputs, errors, t)),
             )
-            .when(self.creating, |this| {
-                this.child(PixelLoader::new("アニメーション生成中..."))
+            .when(self.creating, |root| {
+                root.child(
+                    PixelLoader::new("アニメーション生成中...")
+                        .cancelling(self.cancelling)
+                        .on_cancel({
+                            let this = this.clone();
+                            move |_, cx| this.update(cx, |this, cx| this.cancel(cx))
+                        }),
+                )
             })
     }
 }

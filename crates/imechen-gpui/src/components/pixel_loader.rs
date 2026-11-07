@@ -76,11 +76,17 @@ fn scatter(index: usize) -> (f32, f32) {
     (angle.cos() * distance, angle.sin() * distance)
 }
 
+type OnCancel = Box<dyn Fn(&mut Window, &mut App) + 'static>;
+
+const CANCELLING_LABEL: &str = "キャンセル中...";
+
 /// Full-window overlay that blocks the UI underneath while work runs.
 #[derive(IntoElement)]
 pub struct PixelLoader {
     label: SharedString,
     progress: Option<u32>,
+    cancelling: bool,
+    on_cancel: Option<OnCancel>,
 }
 
 impl PixelLoader {
@@ -88,11 +94,25 @@ impl PixelLoader {
         Self {
             label: label.into(),
             progress: None,
+            cancelling: false,
+            on_cancel: None,
         }
     }
 
     pub fn progress(mut self, percent: u32) -> Self {
         self.progress = Some(percent);
+        self
+    }
+
+    pub fn on_cancel(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_cancel = Some(Box::new(handler));
+        self
+    }
+
+    /// Waiting for the worker to stop: the label says so and a second press is
+    /// pointless, so the button is disabled.
+    pub fn cancelling(mut self, cancelling: bool) -> Self {
+        self.cancelling = cancelling;
         self
     }
 }
@@ -158,7 +178,11 @@ impl RenderOnce for PixelLoader {
                             .text_size(px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(white())
-                            .child(self.label),
+                            .child(if self.cancelling {
+                                SharedString::from(CANCELLING_LABEL)
+                            } else {
+                                self.label
+                            }),
                     )
                     .children(self.progress.map(|percent| {
                         div()
@@ -166,6 +190,28 @@ impl RenderOnce for PixelLoader {
                             .font_family(mono)
                             .text_color(white().opacity(0.6))
                             .child(format!("{percent}%"))
+                    }))
+                    .children(self.on_cancel.map(|handler| {
+                        let disabled = self.cancelling;
+                        div()
+                            .id("pixel-loader-cancel")
+                            .px(px(20.))
+                            .h(px(36.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(white().opacity(0.6))
+                            .text_size(px(14.))
+                            .text_color(white())
+                            .child("キャンセル")
+                            .when(disabled, |this| this.opacity(0.4))
+                            .when(!disabled, |this| {
+                                this.cursor_pointer()
+                                    .hover(|style| style.bg(white().opacity(0.15)))
+                                    .on_click(move |_, window, cx| handler(window, cx))
+                            })
                     })),
             ),
         )

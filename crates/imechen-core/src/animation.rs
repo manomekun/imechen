@@ -1,3 +1,4 @@
+use crate::cancel::{CancelToken, JobGuard, Outcome};
 use crate::output::OutputReservation;
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{imageops::FilterType, Frame, RgbaImage};
@@ -45,7 +46,10 @@ impl Drop for TempDirGuard {
 }
 
 /// Load and optionally resize images to match the first frame's dimensions
-fn load_frames(paths: &[String]) -> Result<(Vec<RgbaImage>, u32, u32), String> {
+fn load_frames(
+    paths: &[String],
+    cancel: &CancelToken,
+) -> Result<Outcome<(Vec<RgbaImage>, u32, u32)>, String> {
     if paths.is_empty() {
         return Err("No images provided".to_string());
     }
@@ -56,6 +60,9 @@ fn load_frames(paths: &[String]) -> Result<(Vec<RgbaImage>, u32, u32), String> {
     let mut frames = vec![first.to_rgba8()];
 
     for path in &paths[1..] {
+        if cancel.is_cancelled() {
+            return Ok(Outcome::Cancelled);
+        }
         let img = image::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
         // Resize to match first frame if dimensions differ
         let resized = if img.width() != width || img.height() != height {
@@ -66,10 +73,15 @@ fn load_frames(paths: &[String]) -> Result<(Vec<RgbaImage>, u32, u32), String> {
         frames.push(resized);
     }
 
-    Ok((frames, width, height))
+    Ok(Outcome::Done((frames, width, height)))
 }
 
-fn create_gif(frames: &[RgbaImage], output_path: &Path, fps: u32) -> Result<(), String> {
+fn create_gif(
+    frames: &[RgbaImage],
+    output_path: &Path,
+    fps: u32,
+    cancel: &CancelToken,
+) -> Result<Outcome<()>, String> {
     let delay_ms = (1000.0 / fps as f64) as u32;
     let delay = image::Delay::from_numer_denom_ms(delay_ms, 1);
 
@@ -80,11 +92,14 @@ fn create_gif(frames: &[RgbaImage], output_path: &Path, fps: u32) -> Result<(), 
         .map_err(|e| e.to_string())?;
 
     for rgba in frames {
+        if cancel.is_cancelled() {
+            return Ok(Outcome::Cancelled);
+        }
         let frame = Frame::from_parts(rgba.clone(), 0, 0, delay);
         encoder.encode_frame(frame).map_err(|e| e.to_string())?;
     }
 
-    Ok(())
+    Ok(Outcome::Done(()))
 }
 
 fn create_awebp(
@@ -93,7 +108,8 @@ fn create_awebp(
     height: u32,
     output_path: &Path,
     fps: u32,
-) -> Result<(), String> {
+    cancel: &CancelToken,
+) -> Result<Outcome<()>, String> {
     let timestamp_ms_step = (1000.0 / fps as f64) as i32;
     let config = webp::WebPConfig::new().map_err(|_| "Failed to create WebP config")?;
 
@@ -101,21 +117,26 @@ fn create_awebp(
 
     let mut timestamp = 0i32;
     for rgba in frames {
+        if cancel.is_cancelled() {
+            return Ok(Outcome::Cancelled);
+        }
         let frame = webp::AnimFrame::from_rgba(rgba.as_raw(), width, height, timestamp);
         encoder.add_frame(frame);
         timestamp += timestamp_ms_step;
     }
 
+    // encode() is one-shot and cannot be interrupted.
     let webp_data = encoder.encode();
     std::fs::write(output_path, &*webp_data).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(Outcome::Done(()))
 }
 
 fn create_mp4_from_frames(
     image_paths: &[String],
     output_path: &Path,
     fps: u32,
-) -> Result<(), String> {
+    cancel: &CancelToken,
+) -> Result<Outcome<()>, String> {
     if image_paths.is_empty() {
         return Err("No images provided".to_string());
     }
@@ -140,6 +161,9 @@ fn create_mp4_from_frames(
         .to_string();
 
     for (i, path) in image_paths.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Ok(Outcome::Cancelled);
+        }
         let dest = tmp_dir.join(format!("frame_{:06}.{}", i, ext));
         std::fs::copy(path, &dest).map_err(|e| format!("Failed to copy frame: {}", e))?;
     }
@@ -161,11 +185,20 @@ fn create_mp4_from_frames(
             "18",
             &output_path.to_string_lossy(),
         ],
+        cancel,
         |_| {},
     )
 }
 
-pub fn create_animation(request: CreateAnimationRequest) -> Result<CreateAnimationResult, String> {
+pub fn create_animation(
+    request: CreateAnimationRequest,
+    cancel: &CancelToken,
+) -> Result<Outcome<CreateAnimationResult>, String> {
+    // Declared first so it drops last, after the reservation removed any partial file.
+    let _job = JobGuard::new();
+    if cancel.is_cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
     let paths = &request.image_paths;
     let frame_count = paths.len();
 
@@ -183,19 +216,24 @@ pub fn create_animation(request: CreateAnimationRequest) -> Result<CreateAnimati
     let reservation = OutputReservation::reserve(Path::new(&request.output_dir), output_name, ext)?;
     let output_path = reservation.path().to_path_buf();
 
-    match request.output_format.to_lowercase().as_str() {
-        "gif" => {
-            let (frames, _, _) = load_frames(paths)?;
-            create_gif(&frames, &output_path, request.fps)?;
-        }
-        "awebp" | "webp" => {
-            let (frames, width, height) = load_frames(paths)?;
-            create_awebp(&frames, width, height, &output_path, request.fps)?;
-        }
-        "mp4" => {
-            create_mp4_from_frames(paths, &output_path, request.fps)?;
-        }
+    let finished = match request.output_format.to_lowercase().as_str() {
+        "gif" => match load_frames(paths, cancel)? {
+            Outcome::Done((frames, _, _)) => {
+                create_gif(&frames, &output_path, request.fps, cancel)?
+            }
+            Outcome::Cancelled => Outcome::Cancelled,
+        },
+        "awebp" | "webp" => match load_frames(paths, cancel)? {
+            Outcome::Done((frames, width, height)) => {
+                create_awebp(&frames, width, height, &output_path, request.fps, cancel)?
+            }
+            Outcome::Cancelled => Outcome::Cancelled,
+        },
+        "mp4" => create_mp4_from_frames(paths, &output_path, request.fps, cancel)?,
         _ => unreachable!(),
+    };
+    if finished == Outcome::Cancelled {
+        return Ok(Outcome::Cancelled);
     }
 
     let output_size = std::fs::metadata(&output_path)
@@ -204,11 +242,11 @@ pub fn create_animation(request: CreateAnimationRequest) -> Result<CreateAnimati
 
     let output_path = reservation.commit();
 
-    Ok(CreateAnimationResult {
+    Ok(Outcome::Done(CreateAnimationResult {
         output_path: output_path.to_string_lossy().to_string(),
         frame_count,
         output_size,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -266,7 +304,8 @@ mod tests {
         let before = frame_dirs();
         let out = work.join("out.mp4");
 
-        create_mp4_from_frames(&paths, &out, 10).expect("create_mp4_from_frames failed");
+        create_mp4_from_frames(&paths, &out, 10, &CancelToken::new())
+            .expect("create_mp4_from_frames failed");
 
         assert!(std::fs::metadata(&out).unwrap().len() > 0);
         let leaked: Vec<_> = frame_dirs()
@@ -302,6 +341,13 @@ mod tests {
         }
     }
 
+    fn create_done(req: CreateAnimationRequest) -> Result<CreateAnimationResult, String> {
+        match create_animation(req, &CancelToken::new())? {
+            Outcome::Done(v) => Ok(v),
+            Outcome::Cancelled => Err("unexpectedly cancelled".to_string()),
+        }
+    }
+
     fn work_dir(tag: &str) -> (PathBuf, TempDirGuard) {
         let dir = std::env::temp_dir().join(format!("imechen_anim_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -315,8 +361,8 @@ mod tests {
             let (dir, _guard) = work_dir(format);
             let paths = write_frames(&dir, 3);
 
-            let result = create_animation(request(&dir, paths, format, 10))
-                .expect("create_animation failed");
+            let result =
+                create_done(request(&dir, paths, format, 10)).expect("create_animation failed");
 
             assert_eq!(result.frame_count, 3, "{}", format);
             assert_eq!(
@@ -336,7 +382,7 @@ mod tests {
         let (dir, _guard) = work_dir("fps0");
         let paths = write_frames(&dir, 2);
 
-        let err = create_animation(request(&dir, paths, "gif", 0)).unwrap_err();
+        let err = create_done(request(&dir, paths, "gif", 0)).unwrap_err();
 
         assert!(err.contains("fps"), "{}", err);
     }
@@ -346,7 +392,7 @@ mod tests {
         let (dir, _guard) = work_dir("badfmt");
         let paths = write_frames(&dir, 2);
 
-        let err = create_animation(request(&dir, paths, "apng", 10)).unwrap_err();
+        let err = create_done(request(&dir, paths, "apng", 10)).unwrap_err();
 
         assert!(err.contains("Unsupported format"), "{}", err);
     }
@@ -357,8 +403,7 @@ mod tests {
         let paths = write_frames(&dir, 2);
         std::fs::write(dir.join("anim.gif"), b"keep me").unwrap();
 
-        let result =
-            create_animation(request(&dir, paths, "gif", 10)).expect("create_animation failed");
+        let result = create_done(request(&dir, paths, "gif", 10)).expect("create_animation failed");
 
         assert_eq!(Path::new(&result.output_path), dir.join("anim(1).gif"));
         assert_eq!(std::fs::read(dir.join("anim.gif")).unwrap(), b"keep me");
@@ -370,8 +415,53 @@ mod tests {
         let (dir, _guard) = work_dir("failed");
         let missing = vec![dir.join("missing.png").to_string_lossy().to_string()];
 
-        assert!(create_animation(request(&dir, missing, "gif", 10)).is_err());
+        assert!(create_done(request(&dir, missing, "gif", 10)).is_err());
 
         assert!(!dir.join("anim.gif").exists());
+    }
+
+    #[test]
+    fn pre_cancelled_animation_is_cancelled_and_writes_nothing() {
+        for format in ["gif", "awebp", "mp4"] {
+            let (dir, _guard) = work_dir(&format!("precancel_{}", format));
+            let paths = write_frames(&dir, 3);
+            let before = std::fs::read_dir(&dir).unwrap().count();
+            let cancel = CancelToken::new();
+            cancel.cancel();
+
+            let outcome = create_animation(request(&dir, paths, format, 10), &cancel);
+
+            assert!(matches!(outcome, Ok(Outcome::Cancelled)), "{}", format);
+            assert_eq!(
+                std::fs::read_dir(&dir).unwrap().count(),
+                before,
+                "{}",
+                format
+            );
+        }
+    }
+
+    #[test]
+    fn cancelled_frame_loading_reports_cancelled() {
+        let (dir, _guard) = work_dir("load_cancel");
+        let paths = write_frames(&dir, 3);
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let outcome = load_frames(&paths, &cancel);
+
+        assert!(matches!(outcome, Ok(Outcome::Cancelled)));
+    }
+
+    #[test]
+    fn cancelled_gif_encoding_reports_cancelled() {
+        let (dir, _guard) = work_dir("gif_cancel");
+        let frames = vec![RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])); 3];
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let outcome = create_gif(&frames, &dir.join("a.gif"), 10, &cancel);
+
+        assert!(matches!(outcome, Ok(Outcome::Cancelled)));
     }
 }
