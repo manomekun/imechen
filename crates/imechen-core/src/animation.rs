@@ -182,7 +182,10 @@ fn create_mp4_from_frames(
         let dest = tmp_dir.join(format!("frame_{:06}.{}", i, ext));
         if transcode {
             open_image(Path::new(path))
-                .and_then(|img| img.save_with_format(&dest, image::ImageFormat::Png))
+                .and_then(|img| {
+                    img.save_with_format(&dest, image::ImageFormat::Png)
+                        .map_err(|e| e.to_string())
+                })
                 .map_err(|e| format!("Failed to prepare frame {}: {}", path, e))?;
         } else {
             std::fs::copy(path, &dest).map_err(|e| format!("Failed to copy frame: {}", e))?;

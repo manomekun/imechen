@@ -1,11 +1,10 @@
 use crate::cancel::{CancelToken, JobGuard, Outcome};
 use crate::output::OutputReservation;
 use image::ImageFormat;
-use libheif_rs::integration::image as heif_hooks;
+use libheif_rs::{ColorSpace, FileTypeResult, HeifContext, LibHeif, RgbChroma};
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::Path;
-use std::sync::Once;
 
 #[derive(Debug, Deserialize)]
 pub struct ConvertImageRequest {
@@ -48,16 +47,60 @@ pub const THUMBNAIL_MAX: u32 = 220;
 /// iPhone photo renamed to `.jpg` still decodes. libheif applies the HEIF
 /// rotation and mirroring properties; EXIF orientation is ignored for every
 /// format, as `image` does.
-pub fn open_image(path: &Path) -> image::ImageResult<image::DynamicImage> {
-    static HEIF_HOOKS: Once = Once::new();
-    HEIF_HOOKS.call_once(|| {
-        // AVIF stays unregistered: the bundled libheif has no AV1 decoder.
-        heif_hooks::register_heic_decoding_hook();
-        heif_hooks::register_heif_decoding_hook();
-    });
-    image::ImageReader::open(path)?
-        .with_guessed_format()?
+pub fn open_image(path: &Path) -> Result<image::DynamicImage, String> {
+    if is_heif(path).map_err(|e| e.to_string())? {
+        return decode_heif(path);
+    }
+    image::ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| e.to_string())?
         .decode()
+        .map_err(|e| e.to_string())
+}
+
+fn is_heif(path: &Path) -> std::io::Result<bool> {
+    // heif_check_filetype decides from the 12-byte ftyp header.
+    let mut head = Vec::with_capacity(12);
+    std::fs::File::open(path)?.take(12).read_to_end(&mut head)?;
+    Ok(matches!(
+        libheif_rs::check_file_type(&head),
+        FileTypeResult::Supported | FileTypeResult::Unsupported
+    ))
+}
+
+/// libheif-rs's `image` decoding hook is not used because it hands 10-bit
+/// samples over unscaled in 16-bit buffers, which renders them nearly black.
+/// Asking libheif for 8-bit RGB(A) makes it scale higher bit depths down.
+fn decode_heif(path: &Path) -> Result<image::DynamicImage, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let ctx = HeifContext::read_from_bytes(&bytes).map_err(|e| e.to_string())?;
+    let handle = ctx.primary_image_handle().map_err(|e| e.to_string())?;
+    let has_alpha = handle.has_alpha_channel();
+    let chroma = if has_alpha {
+        RgbChroma::Rgba
+    } else {
+        RgbChroma::Rgb
+    };
+    let decoded = LibHeif::new()
+        .decode(&handle, ColorSpace::Rgb(chroma), None)
+        .map_err(|e| e.to_string())?;
+    let plane = decoded
+        .planes()
+        .interleaved
+        .ok_or("libheif returned no interleaved plane")?;
+
+    let (width, height) = (plane.width, plane.height);
+    let row_len = width as usize * if has_alpha { 4 } else { 3 };
+    let mut pixels = Vec::with_capacity(row_len * height as usize);
+    for row in plane.data.chunks(plane.stride).take(height as usize) {
+        pixels.extend_from_slice(&row[..row_len]);
+    }
+    let image = if has_alpha {
+        image::RgbaImage::from_raw(width, height, pixels).map(image::DynamicImage::ImageRgba8)
+    } else {
+        image::RgbImage::from_raw(width, height, pixels).map(image::DynamicImage::ImageRgb8)
+    };
+    image.ok_or_else(|| "libheif returned a truncated image".to_string())
 }
 
 fn generate_thumbnail(img: &image::DynamicImage) -> Vec<u8> {
@@ -94,7 +137,7 @@ fn format_extension(format: ImageFormat) -> &'static str {
 pub fn get_image_info(path: &str) -> Result<ImageInfo, String> {
     let file_path = Path::new(path);
     let metadata = std::fs::metadata(file_path).map_err(|e| e.to_string())?;
-    let img = open_image(file_path).map_err(|e| e.to_string())?;
+    let img = open_image(file_path)?;
 
     let name = file_path
         .file_name()
@@ -212,7 +255,7 @@ pub fn convert_image(
     }
     let source = Path::new(&request.source_path);
     let original_size = std::fs::metadata(source).map_err(|e| e.to_string())?.len();
-    let mut img = open_image(source).map_err(|e| e.to_string())?;
+    let mut img = open_image(source)?;
     if cancel.is_cancelled() {
         return Ok(Outcome::Cancelled);
     }
@@ -503,21 +546,67 @@ mod tests {
     /// 64x48 HEVC still (`heic` brand) encoded from R = 4x, G = 5y, B = 128.
     const SAMPLE_HEIC: &[u8] = include_bytes!("../tests/fixtures/sample.heic");
 
+    /// The same picture at 10 bits per channel.
+    const SAMPLE_10BIT_HEIC: &[u8] = include_bytes!("../tests/fixtures/sample-10bit.heic");
+    /// The same picture stored unrotated with an `irot` of 90° clockwise.
+    const SAMPLE_ROTATED_HEIC: &[u8] = include_bytes!("../tests/fixtures/sample-rotated.heic");
+
     fn write_heic(dir: &TempDir, name: &str) -> String {
+        write_bytes(dir, name, SAMPLE_HEIC)
+    }
+
+    fn write_bytes(dir: &TempDir, name: &str, bytes: &[u8]) -> String {
         let path = dir.path().join(name);
-        std::fs::write(&path, SAMPLE_HEIC).unwrap();
+        std::fs::write(&path, bytes).unwrap();
         path.to_string_lossy().to_string()
+    }
+
+    fn assert_pixel_near(img: &image::DynamicImage, x: u32, y: u32, want: [u8; 3]) {
+        let px = img.to_rgb8().get_pixel(x, y).0;
+        for (got, want_c) in px.into_iter().zip(want) {
+            assert!(
+                got.abs_diff(want_c) <= 20,
+                "pixel ({}, {}) {:?} is not near {:?}",
+                x,
+                y,
+                px,
+                want
+            );
+        }
     }
 
     fn assert_matches_heic_sample(img: &image::DynamicImage) {
         assert_eq!((img.width(), img.height()), (64, 48));
-        let px = img.to_rgb8().get_pixel(32, 24).0;
-        for (got, want) in px.into_iter().zip([128u8, 120, 128]) {
-            assert!(
-                got.abs_diff(want) <= 12,
-                "pixel {:?} is not near (128, 120, 128)",
-                px
-            );
+        assert_pixel_near(img, 32, 24, [128, 120, 128]);
+        assert_pixel_near(img, 10, 42, [40, 210, 128]);
+    }
+
+    #[test]
+    fn heic_rotation_property_is_applied() {
+        let dir = TempDir::new("heic_rotated");
+        let source = write_bytes(&dir, "portrait.heic", SAMPLE_ROTATED_HEIC);
+
+        let img = open_image(Path::new(&source)).unwrap();
+
+        assert_eq!((img.width(), img.height()), (48, 64));
+        // Turning 90° clockwise moves source (10, 42) to (47 - 42, 10).
+        assert_pixel_near(&img, 5, 10, [40, 210, 128]);
+    }
+
+    #[test]
+    fn ten_bit_heic_converts_to_every_output_format() {
+        let dir = TempDir::new("heic_10bit");
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let source = write_bytes(&dir, "hdr.heic", SAMPLE_10BIT_HEIC);
+
+        for format in ["png", "jpeg", "gif", "webp", "bmp"] {
+            let mut req = request(&source, &dir, format);
+            req.quality = Some(100);
+
+            let result = convert_done(req).unwrap_or_else(|e| panic!("{}: {}", format, e));
+
+            let decoded = image::open(&result.output_path).expect("output is not decodable");
+            assert_matches_heic_sample(&decoded);
         }
     }
 

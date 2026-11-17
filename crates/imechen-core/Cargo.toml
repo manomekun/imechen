@@ -17,4 +17,4 @@ sha2 = "0.10"
 # links every codec found on the build machine (x265 and x264 are GPL), so
 # release builds use the decode-only static libheif from scripts/build-libheif.sh.
 # v1_17 is the oldest API the crate supports; decoding needs nothing newer.
-libheif-rs = { version = "3", default-features = false, features = ["v1_17", "image"] }
+libheif-rs = { version = "3", default-features = false, features = ["v1_17"] }
