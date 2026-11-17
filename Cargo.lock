@@ -3166,7 +3166,7 @@ checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
 name = "imechen-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ffmpeg-sidecar",
  "image",
@@ -3180,7 +3180,7 @@ dependencies = [
 
 [[package]]
 name = "imechen-gpui"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "dirs",
  "embed-resource",
