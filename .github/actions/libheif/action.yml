@@ -21,14 +21,17 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/vcpkg
-        key: vcpkg-2026.10.16-libheif-core-x64-windows-static-md
+        key: vcpkg-5d4a3dc90c0b3773f3bac81bf41297b54328f471-libheif-core-x64-windows-static-md
 
     - name: Build libheif with vcpkg
       if: runner.os == 'Windows' && steps.vcpkg-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         root="$RUNNER_TEMP/vcpkg"
-        git clone --depth 1 --branch 2026.10.16 https://github.com/microsoft/vcpkg "$root"
+        # Tag 2026.10.16.
+        git init -q "$root"
+        git -C "$root" fetch -q --depth 1 https://github.com/microsoft/vcpkg 5d4a3dc90c0b3773f3bac81bf41297b54328f471
+        git -C "$root" checkout -q FETCH_HEAD
         "$root/bootstrap-vcpkg.bat" -disableMetrics
         "$root/vcpkg.exe" install "libheif[core]:x64-windows-static-md" --clean-after-build
         rm -rf "$root/downloads" "$root/buildtrees" "$root/packages"
@@ -41,16 +44,24 @@ runs:
         # Static libs on the dynamic CRT, which is what Rust links by default.
         echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
 
-    - name: Resolve macOS architecture
-      if: runner.os == 'macOS'
+    # The runner image goes into the cache key: CI tests on ubuntu-24.04 but
+    # packages on ubuntu-22.04, and a build against the newer glibc would not
+    # link there.
+    - name: Resolve build platform
+      if: runner.os != 'Windows'
       id: arch
       shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
       run: |
-        case "${{ inputs.target }}" in
-          x86_64-apple-darwin) echo "osx=x86_64" >> "$GITHUB_OUTPUT" ;;
-          aarch64-apple-darwin) echo "osx=arm64" >> "$GITHUB_OUTPUT" ;;
-          *) echo "osx=$(uname -m)" >> "$GITHUB_OUTPUT" ;;
-        esac
+        echo "image=${ImageOS:-$(uname -s)}" >> "$GITHUB_OUTPUT"
+        if [ "$RUNNER_OS" = macOS ]; then
+          case "$TARGET" in
+            x86_64-apple-darwin) echo "osx=x86_64" >> "$GITHUB_OUTPUT" ;;
+            aarch64-apple-darwin) echo "osx=arm64" >> "$GITHUB_OUTPUT" ;;
+            *) echo "osx=$(uname -m)" >> "$GITHUB_OUTPUT" ;;
+          esac
+        fi
 
     - name: Cache libheif
       if: runner.os != 'Windows'
@@ -58,7 +69,7 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/libheif
-        key: libheif-${{ runner.os }}-${{ steps.arch.outputs.osx || runner.arch }}-${{ hashFiles('scripts/build-libheif.sh') }}
+        key: libheif-${{ steps.arch.outputs.image }}-${{ steps.arch.outputs.osx || runner.arch }}-${{ hashFiles('scripts/build-libheif.sh') }}
 
     - name: Build libheif
       if: runner.os != 'Windows' && steps.unix-cache.outputs.cache-hit != 'true'
