@@ -61,6 +61,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - uses: ./.github/actions/libheif
+        with:
+          target: ${{ matrix.target }}
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -84,8 +88,48 @@ jobs:
       - name: Build
         run: cargo build --release --locked -p imechen-gpui --target ${{ matrix.target }}
 
+      # A dynamically linked libheif or codec would be missing on users' machines.
+      - name: Check libheif is linked statically
+        if: runner.os != 'Windows'
+        run: |
+          bin=target/${{ matrix.target }}/release/imechen
+          if [ "$RUNNER_OS" = macOS ]; then
+            deps=$(otool -L "$bin")
+            bad=$(echo "$deps" | grep -E '/opt/homebrew|/usr/local|heif|de265' || true)
+          else
+            deps=$(ldd "$bin")
+            bad=$(echo "$deps" | grep -E 'heif|de265' || true)
+          fi
+          echo "$deps"
+          if [ -n "$bad" ]; then
+            echo "::error::release binary links external HEIF libraries: $bad"
+            exit 1
+          fi
+
       - name: Package
         run: cargo packager -p imechen-gpui --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+
+      # The LGPL-3.0 requires the notices to ship with the statically linked libheif.
+      - name: Check license notices are packaged
+        if: runner.os != 'Windows'
+        run: |
+          out=crates/imechen-gpui/packager-out
+          if [ "$RUNNER_OS" = macOS ]; then
+            # cargo-packager deletes the intermediate .app once the dmg is built.
+            mnt=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$out"/*.dmg >/dev/null
+            files=$(find "$mnt" -path '*.app/Contents/Resources/licenses/*' -type f)
+            hdiutil detach "$mnt" >/dev/null
+          else
+            files=$(dpkg-deb -c "$out"/*.deb | grep '/licenses/' || true)
+          fi
+          echo "$files"
+          for name in THIRD-PARTY-NOTICES.txt libheif-COPYING.txt libde265-COPYING.txt; do
+            if ! echo "$files" | grep -q "$name"; then
+              echo "::error::$name is missing from the package"
+              exit 1
+            fi
+          done
 
       # Release asset names are consumed by install.sh, the Homebrew cask and the README.
       - name: Collect release assets

@@ -1,6 +1,6 @@
 [package]
 name = "imechen-core"
-version = "1.0.2"
+version = "1.0.3"
 description = "Conversion logic shared by imechen frontends"
 authors = ["manomekun"]
 edition = "2021"
@@ -13,3 +13,8 @@ oxipng = { version = "9", default-features = false, features = ["parallel"] }
 webp = "0.3"
 ffmpeg-sidecar = "2.7"
 sha2 = "0.10"
+# Links a system libheif. embedded-libheif is avoided because its CMake build
+# links every codec found on the build machine (x265 and x264 are GPL), so
+# release builds use the decode-only static libheif from scripts/build-libheif.sh.
+# v1_17 is the oldest API the crate supports; decoding needs nothing newer.
+libheif-rs = { version = "3", default-features = false, features = ["v1_17"] }

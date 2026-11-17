@@ -1,0 +1,38 @@
+Third-party software in imechen
+================================
+
+imechen reads HEIC/HEIF images with the libraries below, which are
+statically linked into the imechen executable. They are licensed under the
+GNU Lesser General Public License, version 3 (LGPL-3.0). The full license
+texts, together with the GNU General Public License, version 3 that the
+LGPL-3.0 builds on, are in the files next to this one.
+
+  libheif 1.23 (https://github.com/strukturag/libheif)
+    Copyright (c) 2017-2025 Dirk Farin and the libheif contributors
+    License: LGPL-3.0 (libheif-COPYING.txt)
+
+  libde265 1.1 (https://github.com/strukturag/libde265)
+    Copyright (c) 2013-2014 struktur AG, Dirk Farin and the libde265 contributors
+    License: LGPL-3.0 (libde265-COPYING.txt)
+
+The exact source versions are pinned in scripts/build-libheif.sh (macOS and
+Linux) and .github/actions/libheif/action.yml (Windows, via vcpkg) of the
+imechen source repository:
+
+  https://github.com/manomekun/imechen
+
+Replacing the libraries
+-----------------------
+
+You may modify these libraries and relink imechen against your modified
+versions. The complete source of imechen is available at the repository
+above. To rebuild with your own libheif/libde265:
+
+  1. Build them as static libraries into a directory PREFIX, for example by
+     editing the source URLs in scripts/build-libheif.sh and running
+     `scripts/build-libheif.sh PREFIX`.
+  2. Build imechen against them:
+       PKG_CONFIG_PATH=PREFIX/lib/pkgconfig SYSTEM_DEPS_LIBHEIF_LINK=static \
+         cargo build --release -p imechen-gpui
+     On Windows, install them with vcpkg and set VCPKG_ROOT and
+     VCPKGRS_TRIPLET=x64-windows-static-md instead.
