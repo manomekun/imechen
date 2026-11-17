@@ -28,6 +28,8 @@ icons = [
   "icons/icon.icns",
   "icons/icon.ico",
 ]
+# LGPL-3.0 notices for the statically linked libheif/libde265.
+resources = ["licenses"]
 
 # 12.0 is the floor gpui-pre-apple compiles its Metal shaders for (-mmacosx-version-min).
 [package.metadata.packager.macos]

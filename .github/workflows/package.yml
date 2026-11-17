@@ -109,6 +109,24 @@ jobs:
       - name: Package
         run: cargo packager -p imechen-gpui --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
 
+      # The LGPL-3.0 requires the notices to ship with the statically linked libheif.
+      - name: Check license notices are packaged
+        if: runner.os != 'Windows'
+        run: |
+          out=crates/imechen-gpui/packager-out
+          if [ "$RUNNER_OS" = macOS ]; then
+            files=$(find "$out" -path '*.app/Contents/Resources/licenses/*' -type f)
+          else
+            files=$(dpkg-deb -c "$out"/*.deb | grep '/licenses/' || true)
+          fi
+          echo "$files"
+          for name in THIRD-PARTY-NOTICES.txt libheif-COPYING.txt libde265-COPYING.txt; do
+            if ! echo "$files" | grep -q "$name"; then
+              echo "::error::$name is missing from the package"
+              exit 1
+            fi
+          done
+
       # Release asset names are consumed by install.sh, the Homebrew cask and the README.
       - name: Collect release assets
         run: |

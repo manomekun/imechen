@@ -167,3 +167,5 @@ cargo packager -p imechen-gpui --release
 - ソースコードの閲覧: OK
 - 商用・本番利用: NG（ライセンス購入が必要）
 - 2030-03-25 以降 Apache License 2.0 に移行
+
+HEIC の読み込みに使う libheif と libde265（LGPL-3.0）を静的リンクしています。ライセンス本文と差し替え手順は [crates/imechen-gpui/licenses](crates/imechen-gpui/licenses) にあり、インストーラーにも同梱しています。
