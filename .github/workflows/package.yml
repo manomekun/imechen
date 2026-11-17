@@ -115,7 +115,11 @@ jobs:
         run: |
           out=crates/imechen-gpui/packager-out
           if [ "$RUNNER_OS" = macOS ]; then
-            files=$(find "$out" -path '*.app/Contents/Resources/licenses/*' -type f)
+            # cargo-packager deletes the intermediate .app once the dmg is built.
+            mnt=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$out"/*.dmg >/dev/null
+            files=$(find "$mnt" -path '*.app/Contents/Resources/licenses/*' -type f)
+            hdiutil detach "$mnt" >/dev/null
           else
             files=$(dpkg-deb -c "$out"/*.deb | grep '/licenses/' || true)
           fi
