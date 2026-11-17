@@ -50,13 +50,22 @@ common=(
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   -DBUILD_SHARED_LIBS=OFF
 )
+de265_extra=()
 if [ "$(uname -s)" = Darwin ]; then
   # Must match minimum-system-version in crates/imechen-gpui/Cargo.toml.
   export MACOSX_DEPLOYMENT_TARGET=12.0
-  common+=(-DCMAKE_OSX_ARCHITECTURES="${OSX_ARCH:-$(uname -m)}")
+  osx_arch=${OSX_ARCH:-$(uname -m)}
+  common+=(-DCMAKE_OSX_ARCHITECTURES="$osx_arch")
+  if [ "$osx_arch" = x86_64 ]; then
+    # The AVX2/AVX-512 kernels pick themselves via __builtin_cpu_supports,
+    # whose __cpu_model lives in clang's compiler-rt. rustc links with
+    # -nodefaultlibs, so the symbol stays undefined. The SSE4.1 kernels remain.
+    de265_extra+=(-DENABLE_AVX2=OFF -DENABLE_AVX512=OFF)
+  fi
 fi
 
 cmake -S "$work/libde265-${LIBDE265_VERSION}" -B "$work/build-de265" "${common[@]}" \
+  ${de265_extra[@]+"${de265_extra[@]}"} \
   -DENABLE_DECODER=OFF \
   -DENABLE_ENCODER=OFF \
   -DENABLE_SDL=OFF
