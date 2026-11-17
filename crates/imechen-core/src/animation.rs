@@ -1,4 +1,5 @@
 use crate::cancel::{CancelToken, JobGuard, Outcome};
+use crate::image::open_image;
 use crate::output::OutputReservation;
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{imageops::FilterType, Frame, RgbaImage};
@@ -54,8 +55,8 @@ fn load_frames(
         return Err("No images provided".to_string());
     }
 
-    let first =
-        image::open(&paths[0]).map_err(|e| format!("Failed to open {}: {}", paths[0], e))?;
+    let first = open_image(Path::new(&paths[0]))
+        .map_err(|e| format!("Failed to open {}: {}", paths[0], e))?;
     let (width, height) = (first.width(), first.height());
     let mut frames = vec![first.to_rgba8()];
 
@@ -63,7 +64,8 @@ fn load_frames(
         if cancel.is_cancelled() {
             return Ok(Outcome::Cancelled);
         }
-        let img = image::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let img =
+            open_image(Path::new(path)).map_err(|e| format!("Failed to open {}: {}", path, e))?;
         // Resize to match first frame if dimensions differ
         let resized = if img.width() != width || img.height() != height {
             image::imageops::resize(&img.to_rgba8(), width, height, FilterType::Lanczos3)
@@ -131,6 +133,12 @@ fn create_awebp(
     Ok(Outcome::Done(()))
 }
 
+fn is_heif_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
+}
+
 fn create_mp4_from_frames(
     image_paths: &[String],
     output_path: &Path,
@@ -153,19 +161,32 @@ fn create_mp4_from_frames(
     std::fs::create_dir(&tmp_dir).map_err(|e| e.to_string())?;
     let _guard = TempDirGuard(tmp_dir.clone());
 
-    // Create symlinks/copies with sequential names for ffmpeg
-    let ext = Path::new(&image_paths[0])
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    // ffmpeg's image2 demuxer cannot read HEIF, so such batches are decoded
+    // here and handed over as PNG. One extension has to cover the whole
+    // sequence, hence all frames, not only the HEIF ones.
+    let transcode = image_paths.iter().any(|p| is_heif_path(p));
+    let ext = if transcode {
+        "png".to_string()
+    } else {
+        Path::new(&image_paths[0])
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    };
 
     for (i, path) in image_paths.iter().enumerate() {
         if cancel.is_cancelled() {
             return Ok(Outcome::Cancelled);
         }
         let dest = tmp_dir.join(format!("frame_{:06}.{}", i, ext));
-        std::fs::copy(path, &dest).map_err(|e| format!("Failed to copy frame: {}", e))?;
+        if transcode {
+            open_image(Path::new(path))
+                .and_then(|img| img.save_with_format(&dest, image::ImageFormat::Png))
+                .map_err(|e| format!("Failed to prepare frame {}: {}", path, e))?;
+        } else {
+            std::fs::copy(path, &dest).map_err(|e| format!("Failed to copy frame: {}", e))?;
+        }
     }
 
     let pattern = tmp_dir.join(format!("frame_%06d.{}", ext));
@@ -275,6 +296,14 @@ mod tests {
         }
     }
 
+    /// Held by every test that makes an MP4, because the leak check below
+    /// would otherwise see another test's live frame dir as leaked.
+    static FRAME_DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn frame_dir_lock() -> std::sync::MutexGuard<'static, ()> {
+        FRAME_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn frame_dirs() -> Vec<PathBuf> {
         std::fs::read_dir(std::env::temp_dir())
             .unwrap()
@@ -301,6 +330,7 @@ mod tests {
                 p.to_string_lossy().to_string()
             })
             .collect();
+        let _lock = frame_dir_lock();
         let before = frame_dirs();
         let out = work.join("out.mp4");
 
@@ -374,6 +404,28 @@ mod tests {
                 result.output_size,
                 std::fs::metadata(&result.output_path).unwrap().len()
             );
+        }
+    }
+
+    fn write_heic_frame(dir: &Path, name: &str) -> String {
+        let p = dir.join(name);
+        std::fs::write(&p, include_bytes!("../tests/fixtures/sample.heic")).unwrap();
+        p.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn heic_frames_mixed_with_png_frames_make_every_animation_format() {
+        let _lock = frame_dir_lock();
+        for format in ["gif", "awebp", "mp4"] {
+            let (dir, _guard) = work_dir(&format!("heic_{}", format));
+            let mut paths = vec![write_heic_frame(&dir, "IMG_0001.HEIC")];
+            paths.extend(write_frames(&dir, 2));
+
+            let result =
+                create_done(request(&dir, paths, format, 10)).expect("create_animation failed");
+
+            assert_eq!(result.frame_count, 3, "{}", format);
+            assert!(result.output_size > 0, "{}", format);
         }
     }
 

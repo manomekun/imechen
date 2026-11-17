@@ -1,9 +1,11 @@
 use crate::cancel::{CancelToken, JobGuard, Outcome};
 use crate::output::OutputReservation;
 use image::ImageFormat;
+use libheif_rs::integration::image as heif_hooks;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Once;
 
 #[derive(Debug, Deserialize)]
 pub struct ConvertImageRequest {
@@ -40,6 +42,24 @@ pub struct ImageInfo {
 /// without them having to decode full-size sources once per row.
 pub const THUMBNAIL_MAX: u32 = 220;
 
+/// Decodes anything `image` reads, plus HEIC/HEIF through libheif.
+///
+/// The format comes from the file's signature before its extension, so an
+/// iPhone photo renamed to `.jpg` still decodes. libheif applies the HEIF
+/// rotation and mirroring properties; EXIF orientation is ignored for every
+/// format, as `image` does.
+pub fn open_image(path: &Path) -> image::ImageResult<image::DynamicImage> {
+    static HEIF_HOOKS: Once = Once::new();
+    HEIF_HOOKS.call_once(|| {
+        // AVIF stays unregistered: the bundled libheif has no AV1 decoder.
+        heif_hooks::register_heic_decoding_hook();
+        heif_hooks::register_heif_decoding_hook();
+    });
+    image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .decode()
+}
+
 fn generate_thumbnail(img: &image::DynamicImage) -> Vec<u8> {
     let thumb = img.thumbnail(THUMBNAIL_MAX, THUMBNAIL_MAX);
     let mut buf = Cursor::new(Vec::new());
@@ -74,7 +94,7 @@ fn format_extension(format: ImageFormat) -> &'static str {
 pub fn get_image_info(path: &str) -> Result<ImageInfo, String> {
     let file_path = Path::new(path);
     let metadata = std::fs::metadata(file_path).map_err(|e| e.to_string())?;
-    let img = image::open(file_path).map_err(|e| e.to_string())?;
+    let img = open_image(file_path).map_err(|e| e.to_string())?;
 
     let name = file_path
         .file_name()
@@ -192,7 +212,7 @@ pub fn convert_image(
     }
     let source = Path::new(&request.source_path);
     let original_size = std::fs::metadata(source).map_err(|e| e.to_string())?.len();
-    let mut img = image::open(source).map_err(|e| e.to_string())?;
+    let mut img = open_image(source).map_err(|e| e.to_string())?;
     if cancel.is_cancelled() {
         return Ok(Outcome::Cancelled);
     }
@@ -478,6 +498,66 @@ mod tests {
         let thumb = image::load_from_memory_with_format(&info.thumbnail_png, ImageFormat::Png)
             .expect("thumbnail is not a PNG");
         assert!(thumb.width() <= THUMBNAIL_MAX && thumb.height() <= THUMBNAIL_MAX);
+    }
+
+    /// 64x48 HEVC still (`heic` brand) encoded from R = 4x, G = 5y, B = 128.
+    const SAMPLE_HEIC: &[u8] = include_bytes!("../tests/fixtures/sample.heic");
+
+    fn write_heic(dir: &TempDir, name: &str) -> String {
+        let path = dir.path().join(name);
+        std::fs::write(&path, SAMPLE_HEIC).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn assert_matches_heic_sample(img: &image::DynamicImage) {
+        assert_eq!((img.width(), img.height()), (64, 48));
+        let px = img.to_rgb8().get_pixel(32, 24).0;
+        for (got, want) in px.into_iter().zip([128u8, 120, 128]) {
+            assert!(
+                got.abs_diff(want) <= 12,
+                "pixel {:?} is not near (128, 120, 128)",
+                px
+            );
+        }
+    }
+
+    #[test]
+    fn heic_is_read_regardless_of_extension_case() {
+        let dir = TempDir::new("heic_case");
+        for name in ["lower.heic", "UPPER.HEIC", "photo.heif"] {
+            let source = write_heic(&dir, name);
+
+            let info = get_image_info(&source).expect("get_image_info failed");
+
+            assert_eq!((info.width, info.height), (64, 48), "{}", name);
+            assert!(!info.thumbnail_png.is_empty(), "{}", name);
+        }
+    }
+
+    #[test]
+    fn heic_is_detected_from_its_signature_when_the_extension_is_wrong() {
+        let dir = TempDir::new("heic_misnamed");
+        let source = write_heic(&dir, "renamed.jpg");
+
+        assert_matches_heic_sample(&open_image(Path::new(&source)).unwrap());
+    }
+
+    #[test]
+    fn heic_converts_to_every_output_format_with_its_pixels() {
+        let dir = TempDir::new("heic_convert");
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        let source = write_heic(&dir, "IMG_0001.HEIC");
+
+        for format in ["png", "jpeg", "gif", "webp", "bmp"] {
+            let mut req = request(&source, &dir, format);
+            req.quality = Some(100);
+
+            let result = convert_done(req).expect("convert_image failed");
+
+            let decoded = image::open(&result.output_path).expect("output is not decodable");
+            assert_matches_heic_sample(&decoded);
+            assert_eq!(result.original_size, SAMPLE_HEIC.len() as u64);
+        }
     }
 
     fn same_dir_request(source: &str, dir: &TempDir, format: &str) -> ConvertImageRequest {
