@@ -46,7 +46,9 @@
 
 ### 画像変換
 
-- 入力: `image` クレートで読み込める画像（JPEG, PNG, GIF, WebP, BMP など）
+- 入力: `image` クレートで読み込める画像（JPEG, PNG, GIF, WebP, BMP など）と HEIC / HEIF
+  - 形式は拡張子より先にファイルの中身で判定する（拡張子が `.jpg` の HEIC も読める。拡張子の大文字・小文字は問わない）
+  - HEIC / HEIF は主画像を読み込み、ファイル内の回転・反転の指定を適用する。EXIF の向き情報はどの形式でも適用しない
 - 出力形式: PNG（既定）/ JPEG / GIF / WebP / BMP
 - 一覧の列: サムネイル・ファイル名・画像サイズ・ファイルサイズ
 - 成功したファイルは一覧から外し、失敗したファイルは一覧に残す
@@ -89,9 +91,9 @@
 
 ### アニメーション作成
 
-- 連番画像から GIF（既定）/ Animated WebP / MP4 を作る
+- 連番画像から GIF（既定）/ Animated WebP / MP4 を作る。入力は画像変換と同じ
   - GIF・Animated WebP: 2 枚目以降が 1 枚目とサイズが違う場合は、1 枚目のサイズにリサイズする。GIF は無限ループ
-  - MP4: H.264（yuv420p、CRF 18）
+  - MP4: H.264（yuv420p、CRF 18）。HEIC / HEIF（拡張子で判定）を含む場合は全フレームを PNG にしてから ffmpeg に渡す（ffmpeg の連番入力は HEIF を読めないため）
 - 一覧の列: 番号・サムネイル・ファイル名・画像サイズ・ファイルサイズ・並べ替えボタン
   - 追加したファイルは、追加したまとまりごとにファイル名の数値を考慮した順（`frame2` < `frame10`）に並べて末尾に足す
   - 上へ / 下へボタンで順番を入れ替える。一覧の順番がフレームの順番になる
@@ -119,7 +121,8 @@
 | 言語 | Rust |
 | フレームワーク | GPUI（`gpui-pre`） |
 | UI 部品 | `gpui-kit` |
-| 画像処理 | `image`、`imagequant` + `oxipng`（PNG）、`webp` |
+| 画像処理 | `image`、`imagequant` + `oxipng`（PNG）、`webp`、`libheif-rs`（HEIC / HEIF の読み込み） |
+| HEIF デコーダ | libheif + libde265 を静的リンク（HEVC のデコードのみ。配布ビルドは `scripts/build-libheif.sh`、Windows は vcpkg で用意する） |
 | メディア処理 | `ffmpeg-sidecar`（ffmpeg 実行ファイルを固定 URL + SHA-256 検証で取得） |
 | 永続化 | テーマ設定を設定ディレクトリの `imechen/theme` に保存 |
 | 動画コーデック | H.264（WebM のみ VP9）、音声 AAC（WebM のみ Opus） |

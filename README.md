@@ -18,7 +18,7 @@ imechenは、画像や動画の形式変換・圧縮をオフラインで行え�
 
 ## 主な機能
 
-- **画像変換** — JPEG, PNG, GIF, WebP, BMP, HEIF を相互変換
+- **画像変換** — JPEG, PNG, GIF, WebP, BMP を相互変換。iPhone の HEIC も読み込める
 - **動画変換** — MP4, MOV, AVI, WebM, FLV, HEVC を相互変換
 - **アニメーション作成** — 連番画像から GIF / Animated WebP / MP4 を生成
 - **リサイズ** — 幅×高さ指定、縦横比維持オプション付き
@@ -118,9 +118,9 @@ chmod +x imechen_*.AppImage
 
 | 種類 | 入力 | 出力 |
 |---|---|---|
-| 画像 | JPEG, PNG, GIF, WebP, BMP, HEIF | JPEG, PNG, GIF, WebP, BMP |
+| 画像 | JPEG, PNG, GIF, WebP, BMP, HEIC / HEIF | JPEG, PNG, GIF, WebP, BMP |
 | 動画 | MP4, MOV, AVI, WebM, FLV, HEVC | MP4, MOV, AVI, WebM, FLV |
-| アニメーション | 連番画像（PNG, JPEG, BMP） | GIF, Animated WebP, MP4 |
+| アニメーション | 連番画像（PNG, JPEG, BMP, HEIC など） | GIF, Animated WebP, MP4 |
 
 ## 開発者向け情報
 
@@ -132,11 +132,21 @@ chmod +x imechen_*.AppImage
 - **image crate** — 画像処理
 - **imagequant + oxipng** — PNG 圧縮
 - **webp crate** — WebP エンコード
+- **libheif-rs** — HEIC / HEIF の読み込み（libheif + libde265）
 - **ffmpeg-sidecar** — 動画処理
 
 ### 開発環境のセットアップ
 
 Rust のツールチェーンは `rust-toolchain.toml` で固定されており、rustup が自動で取得します。動画・アニメーションのテストには `ffmpeg` が PATH 上に必要です。
+
+HEIC の読み込みに libheif 1.17 以上を pkg-config で探します。macOS は `brew install libheif`、Ubuntu 24.04 以降は `apt install libheif-dev` で入ります。これらはシステムのライブラリを動的リンクするので開発用です。配布用には `scripts/build-libheif.sh` で HEVC のデコードだけを持つ静的な libheif を作ります。
+
+```bash
+scripts/build-libheif.sh "$HOME/.local/libheif-static"
+export PKG_CONFIG_PATH="$HOME/.local/libheif-static/lib/pkgconfig" SYSTEM_DEPS_LIBHEIF_LINK=static
+```
+
+Windows は vcpkg の `libheif[core]:x64-windows-static-md` を使います（手順は `.github/actions/libheif/action.yml`）。
 
 ```bash
 # 起動
